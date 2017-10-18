@@ -8,7 +8,8 @@ setup(
     author='David Hoerl',
     author_email='hoerlatbiodotlmudotde',
     license='#TODO',
-    packages=['calmutils'],
+    packages=['calmutils.imageio',
+              'calmutils.localization'],
     install_requires=[
         'numpy',
         'scipy',
