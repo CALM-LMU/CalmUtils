@@ -8,8 +8,8 @@ setup(
     author='David Hoerl',
     author_email='hoerlatbiodotlmudotde',
     license='#TODO',
-    packages=['src.calmutils.imageio',
-              'src.calmutils.localization'],
+    packages=['calmutils.imageio',
+              'calmutils.localization'],
     install_requires=[
         'numpy',
         'scipy',
@@ -17,5 +17,6 @@ setup(
         'Pillow',
         'javabridge',
         'python-bioformats'
-    ]
+    ],
+    package_dir={'' : './src'}
 )
