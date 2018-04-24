@@ -9,7 +9,9 @@ setup(
     author_email='hoerlatbiodotlmudotde',
     license='#TODO',
     packages=['calmutils.imageio',
-              'calmutils.localization'],
+              'calmutils.localization',
+              'calmutils.simulation',
+              'calmutils.misc'],
     install_requires=[
         'numpy',
         'scipy',
