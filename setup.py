@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='CalmUtils',
-    version='0.0.3-dev0',
+    version='0.0.3',
     description='commonly used Python code at the Center for Advanced Light Micsroscopy',
     long_description=open('README.rst').read(),
     author='David Hoerl',
