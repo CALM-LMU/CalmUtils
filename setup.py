@@ -11,7 +11,8 @@ setup(
     packages=['calmutils.imageio',
               'calmutils.localization',
               'calmutils.simulation',
-              'calmutils.misc'],
+              'calmutils.misc',
+              'calmutils.morphology'],
     install_requires=[
         'numpy',
         'scipy',
