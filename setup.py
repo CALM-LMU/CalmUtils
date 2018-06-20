@@ -10,6 +10,8 @@ setup(
     license='#TODO',
     packages=['calmutils.imageio',
               'calmutils.localization',
+              'calmutils.localization.util',
+              'calmutils.localization.multiview',
               'calmutils.simulation',
               'calmutils.misc',
               'calmutils.morphology'],
