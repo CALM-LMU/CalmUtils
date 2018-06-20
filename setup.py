@@ -9,7 +9,7 @@ setup(
     author_email='hoerlatbiodotlmudotde',
     license='#TODO',
     packages=['calmutils',
-	      'calmutils.imageio',
+              'calmutils.imageio',
               'calmutils.localization',
               'calmutils.localization.util',
               'calmutils.localization.multiview',
@@ -21,8 +21,6 @@ setup(
         'scipy',
         'scikit-image',
         'Pillow',
-        'javabridge',
-        'python-bioformats'
     ],
     package_dir={'' : './src'}
 )
