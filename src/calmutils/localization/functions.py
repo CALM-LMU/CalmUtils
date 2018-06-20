@@ -78,6 +78,5 @@ class GaussianNoCov:
 
         # sigmas -> to units
         guess[2 + self.num_dim:] *= np.array(self.pixelsize)
-        print(guess)
 
         return guess
