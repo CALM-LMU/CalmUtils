@@ -36,13 +36,17 @@ def gaussian(x, *params):
     return res
 
 
-def refine_point_lsq(img, guess, cutregion=np.array([5, 5]), fun=gaussian, maxmove=5):
+def refine_point_lsq(img, guess, cutregion=None, fun=gaussian, maxmove=5):
     '''
     refine localization in img by least-sqares Gaussian (cov=0) fit
     '''
 
     img_ = img
     guess_ = guess
+
+    # default cut: 5px in each direction
+    if cutregion is None:
+        cutregion = np.ones((len(img.shape),))*5
 
     # a bit overcautious:
     # pad by maximum necessary padding amout if any padding is necessary
