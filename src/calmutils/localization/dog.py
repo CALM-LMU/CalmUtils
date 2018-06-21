@@ -75,7 +75,7 @@ def detect_dog(img, threshold, sigma=None, fwhm=None, pixsize=None, steps_per_oc
 
     # exclude points that are closer than fwhm (in dimension with highest fwhm)
     mindist = int(np.round(np.max(sig_to_full_width_at_quantile(sigma))))
-    peaks = peak_local_max(dog, min_distance=mindist, threshold_abs=threshold)
+    peaks = peak_local_max(dog, min_distance=mindist, threshold_abs=threshold, exclude_border=False)
 
     # return as list
     return [peak for peak in list(peaks)]
