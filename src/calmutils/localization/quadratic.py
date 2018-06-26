@@ -20,6 +20,11 @@ def refine_point(img, guess, maxiter=10):
 
     cut = img_[np.ix_(*idxes)]
     gr = np.gradient(cut)
+
+    # one dimension: we need to wrap gradient in list
+    if len(guess) == 1:
+        gr = [gr]
+
     dx = np.array([gr[i][ones] for i in range(len(guess))])
 
     hessian = np.zeros((len(guess), len(guess)))
