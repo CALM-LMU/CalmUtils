@@ -15,7 +15,8 @@ setup(
               'calmutils.localization.multiview',
               'calmutils.simulation',
               'calmutils.misc',
-              'calmutils.morphology'],
+              'calmutils.morphology',
+              'calmutils.stitching'],
     install_requires=[
         'numpy',
         'scipy',
