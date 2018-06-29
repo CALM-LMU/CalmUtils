@@ -2,7 +2,7 @@ import numpy as np
 from skimage.feature import register_translation
 
 
-def get_overlaps(img1, img2, off_1=None, off_2=None):
+def get_image_overlaps(img1, img2, off_1=None, off_2=None):
     """
     get overlapping areas of two images with optional offsets
 
@@ -76,7 +76,7 @@ def get_shift(img1, img2, off_1=None, off_2=None):
     if off_2 is None:
         off_2 = [0] * len(img1.shape)
 
-    ol = get_overlaps(img1, img2, off_1, off_2)
+    ol = get_image_overlaps(img1, img2, off_1, off_2)
 
     if ol is None:
         return (off_1, off_2)
