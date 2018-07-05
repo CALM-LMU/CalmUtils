@@ -198,18 +198,24 @@ def stitch(ref_img, imgs, ref_off=None, offs=None, cval=-1, corr_thresh=0.5):
         registered offsets of all images (reference, img0, img1, ...)
     off: 1d-array-like
         offset of fused image (coordinates of origin)
+    corrs: list of float
+        correlation coefficients of imgs to ref_img after registration
+        will be None if registration failed or was rejected because of threshold
 
     """
 
     if ref_off is None:
         ref_off = [0] * len(ref_img.shape)
     shifts = []
+    corrs = []
     for i, img in enumerate(imgs):
         _, shift, corr = get_shift(ref_img, img, ref_off, None if offs is None else offs[i])
         if corr is None or corr < corr_thresh:
             shifts.append([0]*len(img.shape) if offs is None else offs[i])
+            corrs.append(None)
         else:
             shifts.append(shift)
+            corrs.append(corr)
 
     fus, off = fuse([ref_img] + imgs, [ref_off] + shifts, cval=cval)
-    return fus, [ref_off] + shifts, off
+    return fus, [ref_off] + shifts, off, corrs
