@@ -41,7 +41,7 @@ def get_image_overlaps(img1, img2, off_1=None, off_2=None):
         min_ol = max(min_1, min_2)
         max_ol = min(max_1, max_2)
 
-        if max_ol < min_ol:
+        if max_ol <= min_ol:
             return None
 
         r_min_1.append(min_ol - off_1[d])
@@ -68,6 +68,8 @@ def get_shift(img1, img2, off_1=None, off_2=None):
     -------
     r_off1, r_off2: 1d-arrays
         registered offsets of the images (r_off1 is equal to off_1)
+    corr: float
+        cross-correlation of the images after registration, may be None if we could not register
     """
 
     if off_1 is None:
@@ -79,15 +81,28 @@ def get_shift(img1, img2, off_1=None, off_2=None):
     ol = get_image_overlaps(img1, img2, off_1, off_2)
 
     if ol is None:
-        return (off_1, off_2)
+        return (off_1, off_2, None)
 
     r_min_1, r_max_1, r_min_2, r_max_2 = ol
     cut1 = img1[tuple(map(lambda x: slice(*x), zip(r_min_1, r_max_1)))]
     cut2 = img2[tuple(map(lambda x: slice(*x), zip(r_min_2, r_max_2)))]
 
     shift_cut, _, _ = register_translation(cut2, cut1)
+    ol_registered = get_image_overlaps(img1, img2, off_1, np.array(off_2) - shift_cut)
 
-    return np.array(off_1), np.array(off_2) - shift_cut
+    # no overlap after registration -> return metadata
+    if ol_registered is None:
+        return (off_1, off_2, None)
+
+    # cut new overlap and get correlation
+    r_min_1, r_max_1, r_min_2, r_max_2 = ol
+    cut1 = img1[tuple(map(lambda x: slice(*x), zip(r_min_1, r_max_1)))]
+    cut2 = img2[tuple(map(lambda x: slice(*x), zip(r_min_2, r_max_2)))]
+
+    # np.corrcoeff gives correlation matrix,
+    # we get the x-y correlation
+    corr = np.corrcoef(cut1.ravel(), cut2.ravel())[0,1]
+    return np.array(off_1), np.array(off_2) - shift_cut, corr
 
 
 def get_fused_shape(imgs, offs):
@@ -154,7 +169,7 @@ def fuse(imgs, offs, fun=np.max, cval=-1):
     return res, mi
 
 
-def stitch(ref_img, imgs, ref_off=None, offs=None, cval=-1):
+def stitch(ref_img, imgs, ref_off=None, offs=None, cval=-1, corr_thresh=0.5):
     """
     Simple translational registration of a set of images to a reference image
     Only comparisions to reference are done, not within the other images
@@ -171,6 +186,9 @@ def stitch(ref_img, imgs, ref_off=None, offs=None, cval=-1):
         offsets of images to register, optional
     cval: float
         constant background value, -1 by default
+    corr_thresh: float
+        minimal corralation coefficient between images after registration,
+        if it is below threshold, we will keep metadata
 
     Returns
     -------
@@ -187,8 +205,11 @@ def stitch(ref_img, imgs, ref_off=None, offs=None, cval=-1):
         ref_off = [0] * len(ref_img.shape)
     shifts = []
     for i, img in enumerate(imgs):
-        _, shift = get_shift(ref_img, img, ref_off, None if offs is None else offs[i])
-        shifts.append(shift)
+        _, shift, corr = get_shift(ref_img, img, ref_off, None if offs is None else offs[i])
+        if corr is None or corr < corr_thresh:
+            shifts.append([0]*len(img.shape) if offs is None else offs[i])
+        else:
+            shifts.append(shift)
 
     fus, off = fuse([ref_img] + imgs, [ref_off] + shifts, cval=cval)
     return fus, [ref_off] + shifts, off
