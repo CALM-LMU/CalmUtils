@@ -2,6 +2,28 @@ import numpy as np
 from PIL import Image
 
 
+def save_tiff_stack(arr, fname, axis=0):
+    """
+    save array as tiff stack
+
+    Parameters
+    ----------
+    arr: array
+        3d-array to save
+    fname: string
+        path of output file
+    axis: int, optional
+        along which axis to create slices
+    """
+
+    def make_index_(i):
+        return tuple([i if j == axis else slice(d) for j, d in enumerate(arr.shape)])
+
+    imlist = [Image.fromarray(arr[make_index_(i)]) for i in range(arr.shape[axis])]
+    imlist[0].save(fname, save_all=True,
+                   append_images=imlist[1:])
+
+
 def read_tiff_stack(path, correct16bit, get_info=False):
     """
     :param path: path to .tif file
