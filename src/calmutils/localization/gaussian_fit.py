@@ -42,21 +42,29 @@ def refine_point_lsq(img, guess, cutregion=None, fun=gaussian, maxmove=5):
     '''
 
     img_ = img
-    guess_ = guess
+    guess_ = np.array(guess, dtype=np.int)
 
     # default cut: 5px in each direction
     if cutregion is None:
-        cutregion = np.ones((len(img.shape),))*5
+        cutregion = np.ones((len(img.shape),), dtype=np.int)*5
+
+    # make sure cutregion is np.array
+    cutregion = np.array(cutregion)
+
+    # remember offset, in case we fit at edge of image
+    off = cutregion + np.min((np.zeros(len(guess_)), guess_-cutregion), axis=0)
 
     # a bit overcautious:
-    # pad by maximum necessary padding amout if any padding is necessary
+    # pad by maximum necessary padding amount if any padding is necessary
     # this way, we always can re-index the same way
+    """
     if np.any(np.greater(guess + cutregion, np.array(img.shape) - 1)) or np.any(np.less(guess - cutregion, 0)):
         guess_ = guess_ + cutregion
         img_ = np.pad(img, [(c, c) for c in cutregion], 'reflect')
+    """
 
     # cut around blob
-    idxes = [tuple(range((guess_[i] - cutregion[i]), (guess_[i] + cutregion[i] + 1))) for i in range(len(guess))]
+    idxes = [tuple(range((max(guess_[i] - cutregion[i], 0)), min(guess_[i] + cutregion[i] + 1, img_.shape[i]))) for i in range(len(guess))]
     cut = img_[np.ix_(*idxes)]
 
     # initial guess for gaussian parameters
@@ -76,5 +84,21 @@ def refine_point_lsq(img, guess, cutregion=None, fun=gaussian, maxmove=5):
                            res[0][2:2 + int((len(guess_) - 2) / 2)]) ** 2)) > maxmove:
         return guess, None
 
-    return np.array(res[0][2:2 + int((len(guess_) - 2) / 2)], dtype=float) - cutregion + guess, res
+    return np.array(res[0][2:2 + int((len(guess_) - 2) / 2)], dtype=float) - off + guess, res
 
+
+def main():
+    from scipy import ndimage as ndi
+
+    img = np.zeros((21,21))
+    img[10,10] = 1.0
+
+    for sigs in [(2,2), (5,5), (7,7)]:
+        for shift in [[-7.8, 6.1]]:
+            img_ = ndi.gaussian_filter(img, sigs)
+            img_ = ndi.shift(img_, shift)
+            loc, fit = refine_point_lsq(img_, (np.array([10,10]) + np.round(np.array(shift))).astype(np.int), [7,7])
+            print((np.array([10, 10]) + np.array(shift)) - loc)
+
+if __name__ == '__main__':
+    main()
