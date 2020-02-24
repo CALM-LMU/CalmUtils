@@ -9,6 +9,7 @@ setup(
     author_email='hoerlatbiodotlmudotde',
     license='#TODO',
     packages=['calmutils',
+              'calmutils.filter',
               'calmutils.imageio',
               'calmutils.localization',
               'calmutils.localization.util',
