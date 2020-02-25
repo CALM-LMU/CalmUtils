@@ -1,0 +1,1 @@
+from .geometric_local_descriptors import descriptor_local_2d
