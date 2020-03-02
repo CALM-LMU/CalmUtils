@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='CalmUtils',
-    version='0.0.12-dev1',
+    version='0.0.12-dev2',
     description='commonly used Python code at the Center for Advanced Light Micsroscopy',
     long_description=open('README.rst').read(),
     author='David Hoerl',
@@ -19,7 +19,8 @@ setup(
               'calmutils.misc',
               'calmutils.misc.json',
               'calmutils.morphology',
-              'calmutils.stitching'],
+              'calmutils.stitching',
+              'calmutils.stitching.fusion'],
     install_requires=[
         'numpy',
         'scipy',
