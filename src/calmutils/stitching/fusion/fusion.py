@@ -38,7 +38,7 @@ def fuse_image(bbox, images, transformations, weights=None, oob_val=0, block_siz
         return fuse_image_(bbox, images, transformations, weights, oob_val, dtype)
 
     # allocate final array
-    res = np.zeros(tuple((ma_ - mi_ for mi_, ma_ in bbox)), dtype=dtype)
+    res = np.zeros(tuple((ma_ - mi_ for mi_, ma_ in bbox)), dtype=dtype if dtype is not None else images[0].dtype)
 
     # list of sub-bboxes
     p = product(*[pairwise(range_includelast(_mi, _ma, s)) for (_mi, _ma), s in zip(bbox, block_size)])
@@ -77,10 +77,10 @@ def fuse_image_(bbox, images, transformations, weights=None, oob_val=0, dtype=No
     if not isinstance(weights, list):
         weights = [weights]
 
-    # prepare output, TODO: can we do it more space-efficient?
-    res_w = np.zeros((len(images),) + init_shape[:-1]) # TODO: dtype?
-    # TODO: do this in float? otherwise we might get rounding errors
-    res = np.zeros((len(images),) + init_shape[:-1], dtype=dtype if dtype is not None else images[0].dtype)
+    # prepare output
+    res_w = np.zeros(init_shape[:-1]) # TODO: dtype?
+    # NB: do this in float, otherwise we might get rounding errors
+    res = np.zeros(init_shape[:-1]) #, dtype=dtype if dtype is not None else images[0].dtype)
 
     # iter images, transforms
     for (i, mat) in enumerate(transformations):
@@ -100,15 +100,14 @@ def fuse_image_(bbox, images, transformations, weights=None, oob_val=0, dtype=No
             weights_i = weights[i].flat[idx_i]
             weights_i[oob_i] = oob_val
             res_i = res_i * weights_i
-            res_w[i] = weights_i.reshape(init_shape[:-1])
+            res_w += weights_i.reshape(init_shape[:-1])
         # set oob to predefined value
         res_i[oob_i] = oob_val
-        res[i] = res_i.reshape(init_shape[:-1])
+        res += res_i.reshape(init_shape[:-1])
 
-    res = np.sum(res, axis=0)
-    res_w = np.sum(res_w, axis=0)
     # only divide by nonzero
     res[res_w != 0] = res[res_w != 0] / res_w[res_w != 0]        
     # set zero weight to oob_val
     res[res_w == 0] = oob_val
+
     return res.astype(dtype if dtype is not None else images[0].dtype)
