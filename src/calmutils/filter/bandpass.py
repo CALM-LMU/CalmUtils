@@ -58,4 +58,4 @@ def soft_fourier_ring_filter(img, radius=1/4, sigma=1/8, amplitude=0.5, backgrou
     # NB: e.g. this (insert above) does not work
     #mask *= img.size / np.sum(mask)
     
-    return result if not return_mask else result, np.fft.fftshift(mask, axes=tuple(range(len(shape)-1))).real
+    return result if not return_mask else (result, np.fft.fftshift(mask, axes=tuple(range(len(shape)-1))).real)
