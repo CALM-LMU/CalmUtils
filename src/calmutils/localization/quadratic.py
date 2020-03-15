@@ -1,24 +1,35 @@
 import numpy as np
 from numpy.linalg import inv
 
+try:
+    import torch
+except ImportError:
+    torch = None
+
 def refine_point(img, guess, maxiter=10):
     '''
     refine a point localization guess in image img by quadratic fit
     done iteratively if we jump more than half a pixel in one dim
     (SIFT subpixel localization)
     '''
+
     ones = tuple([1 for _ in guess])
 
-    img_ = img
-    guess_ = guess
+    min_expansion_necessary = np.equal(guess, 0)
+    max_expansion_necessary = np.equal(guess, np.array(img.shape) - 1)
 
-    if np.any(np.equal(guess, np.array(img.shape) - 1)) or np.any(np.equal(guess, 0)):
-        guess_ = guess_ + 1
-        img_ = np.pad(img, 1, 'reflect')
+    idxes = tuple([slice(np.max([(g - 1), 0]), np.min([(g + 2), img.shape[i]])) for i,g in enumerate(guess)])
 
-    idxes = [tuple(range((g - 1), (g + 2))) for g in guess_]
+    cut = img[idxes]
 
-    cut = img_[np.ix_(*idxes)]
+    if torch is not None and torch.is_tensor(cut):
+        cut = cut.cpu().numpy()
+    
+    if np.any(min_expansion_necessary) or np.any(max_expansion_necessary):
+        cut = np.pad(cut, 1, 'reflect')
+        idxes2 = tuple([slice(0 if min_expansion_necessary[i] else 1, 4 if max_expansion_necessary[i] else 3) for i in range(len(guess))])
+        cut = cut[idxes2]
+
     gr = np.gradient(cut)
 
     # one dimension: we need to wrap gradient in list

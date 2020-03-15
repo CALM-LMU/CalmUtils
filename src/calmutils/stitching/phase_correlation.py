@@ -3,6 +3,7 @@ import warnings
 
 import numpy as np
 
+from ..localization import refine_point
 
 def get_axes_aligned_overlap(shape1, shape2, transform1=None, transform2=None):
 
@@ -40,7 +41,7 @@ def get_transform_from_shift(shift):
     tr[:-1,-1] = shift
     return tr
 
-def phasecorr_align(img1, img2):
+def phasecorr_align(img1, img2, subpixel=False):
 
     freq1 = np.fft.rfftn(img1)
     freq2 = np.fft.rfftn(img2).conj()
@@ -52,7 +53,6 @@ def phasecorr_align(img1, img2):
     pcm = np.fft.irfftn(fccor1, img1.shape)
 
     # get ndim^2 largest values
-    # TODO: subpixel localization!
     idxs = np.argpartition(-pcm.ravel(), int(img1.ndim**2))[:int(img1.ndim**2)]
 
     shift_max = None
@@ -61,6 +61,8 @@ def phasecorr_align(img1, img2):
 
         shifts = np.unravel_index(idx, pcm.shape)
         shifts = np.array(shifts, dtype=np.float64)
+        if subpixel:
+            shifts = refine_point(pcm, shifts)
 
         for off_i in list(product(*zip([0] * len(pcm.shape), pcm.shape))):
 
@@ -92,7 +94,7 @@ def phasecorr_align(img1, img2):
 try:
     import torch
 
-    def phasecorr_align_torch(img1, img2, device=None):
+    def phasecorr_align_torch(img1, img2, device=None, subpixel=False):
 
         with torch.no_grad():
             img1_ = torch.from_numpy(img1).type(torch.FloatTensor)
@@ -114,7 +116,6 @@ try:
             pcm = torch.irfft(fccor1, len(img1_.shape), signal_sizes=img1_.shape)
 
             # get ndim^2 largest values
-            # TODO: subpixels
             _, idxs = torch.topk(pcm.flatten(), int(img1.ndim**2))
 
             shift_max = None
@@ -123,6 +124,8 @@ try:
 
                 shifts = np.unravel_index(idx if device is None else idx.cpu(), pcm.shape)
                 shifts = np.array(shifts, dtype=np.float64)
+                if subpixel:
+                    shifts = refine_point(pcm, shifts)
 
                 # check the different possible positive and negative shifts
                 for off_i in list(product(*zip([0] * len(pcm.shape), pcm.shape))):
