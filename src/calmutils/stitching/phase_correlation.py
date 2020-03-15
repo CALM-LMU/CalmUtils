@@ -60,7 +60,7 @@ def phasecorr_align(img1, img2, subpixel=False):
     for idx in idxs:
 
         shifts = np.unravel_index(idx, pcm.shape)
-        shifts = np.array(shifts, dtype=np.float64)
+        shifts = np.array(shifts, dtype=np.int)
         if subpixel:
             shifts = refine_point(pcm, shifts)
 
@@ -69,7 +69,7 @@ def phasecorr_align(img1, img2, subpixel=False):
             shift_i = shifts - np.array(off_i)
             min_1, max_1 = get_axes_aligned_overlap(img1.shape, img2.shape, transform2=get_transform_from_shift(shift_i))
             min_2, max_2 = get_axes_aligned_overlap(img1.shape, img2.shape, transform2=get_transform_from_shift(-shift_i))
-            min_1, min_2, max_1, max_2 = (arg.astype(np.int) for arg in (min_1, min_2, max_1, max_2))
+            min_1, min_2, max_1, max_2 = (np.round(arg).astype(np.int) for arg in (min_1, min_2, max_1, max_2))
 
             patch1 = img1[tuple((slice(mi, ma) for mi, ma in zip(min_1, max_1)))]
             patch2 = img2[tuple((slice(mi, ma) for mi, ma in zip(min_2, max_2)))]
@@ -123,7 +123,7 @@ try:
             for idx in idxs:
 
                 shifts = np.unravel_index(idx if device is None else idx.cpu(), pcm.shape)
-                shifts = np.array(shifts, dtype=np.float64)
+                shifts = np.array(shifts, dtype=np.int)
                 if subpixel:
                     shifts = refine_point(pcm, shifts)
 
@@ -133,7 +133,7 @@ try:
                     shift_i = shifts - np.array(off_i)
                     min_1, max_1 = get_axes_aligned_overlap(img1.shape, img2.shape, transform2=get_transform_from_shift(shift_i))
                     min_2, max_2 = get_axes_aligned_overlap(img1.shape, img2.shape, transform2=get_transform_from_shift(-shift_i))
-                    min_1, min_2, max_1, max_2 = (arg.astype(np.int) for arg in (min_1, min_2, max_1, max_2))
+                    min_1, min_2, max_1, max_2 = (np.round(arg).astype(np.int) for arg in (min_1, min_2, max_1, max_2))
 
                     patch1 = img1_[tuple((slice(mi, ma) for mi, ma in zip(min_1, max_1)))]
                     patch2 = img2_[tuple((slice(mi, ma) for mi, ma in zip(min_2, max_2)))]
