@@ -2,8 +2,8 @@ from setuptools import setup
 
 setup(
     name='CalmUtils',
-    version='0.0.13-dev2',
-    description='commonly used Python code at the Center for Advanced Light Micsroscopy',
+    version='0.0.13-dev3',
+    description='commonly used Python code at the Center for Advanced Light Microscopy',
     long_description=open('README.rst').read(),
     author='David Hoerl',
     author_email='hoerlatbiodotlmudotde',
@@ -26,6 +26,7 @@ setup(
         'scipy',
         'scikit-image',
         'Pillow',
+        'numba'
     ],
     package_dir={'' : './src'}
 )

@@ -1,5 +1,6 @@
 import numpy as np
 from scipy.optimize import curve_fit, OptimizeWarning
+from numba import njit
 
 def initial_guess_gaussian(cut):
     '''
@@ -21,10 +22,10 @@ def initial_guess_gaussian(cut):
         var += (np.array(idx, dtype=float) - com) ** 2 * cut[idx]
     var /= _sum
 
-    return np.array([_min] + [_max] + list(com) + list(np.sqrt(var)))
+    return np.array([_min] + [_max - _min] + list(com) + list(np.sqrt(var))).astype(float)
 
 
-def gaussian(x, *params):
+def gaussian_nd(x, *params):
     '''
     value of (scaled) Gaussian at the locations in x
     with parameters: min, max, mu_0, ..., mu_n, sigma_0, ..., sigma_n
@@ -35,11 +36,39 @@ def gaussian(x, *params):
     res = _min + _max * np.exp(-1.0/2.0 * np.dot((x - mu)**2, varinv))
     return res
 
+'''
+More explicit numba-compiled versions for 1d, 2d, 3d
+'''
 
-def refine_point_lsq(img, guess, cutregion=None, fun=gaussian, maxmove=5):
+@njit
+def gaussian_1d(x, min_, max_, mu0, sig0):
+    res = min_ + max_ * np.exp(-1.0/2.0 * (((x[:,0] - mu0) / sig0)**2))
+    return res
+
+@njit
+def gaussian_2d(x, min_, max_, mu0, mu1, sig0, sig1):
+    res = min_ + max_ * np.exp(-1.0/2.0 * (((x[:,0] - mu0) / sig0)**2 + ((x[:,1] - mu1) / sig1)**2))
+    return res
+
+@njit
+def gaussian_3d(x, min_, max_, mu0, mu1, mu2, sig0, sig1, sig2):
+    res = min_ + max_ * np.exp(-1.0/2.0 * (((x[:,0] - mu0) / sig0)**2 + ((x[:,1] - mu1) / sig1)**2 + ((x[:,2] - mu2) / sig2)**2))
+    return res
+
+def refine_point_lsq(img, guess, cutregion=None, fun=None, maxmove=5):
     '''
-    refine localization in img by least-sqares Gaussian (cov=0) fit
+    refine localization in img by least-squares Gaussian (cov=0) fit
     '''
+
+    if fun is None:
+        if img.ndim == 1:
+            fun = gaussian_1d
+        elif img.ndim == 2:
+            fun = gaussian_2d
+        elif img.ndim == 3:
+            fun = gaussian_3d
+        else:
+            fun = gaussian_nd
 
     img_ = img
     guess_ = np.array(guess, dtype=np.int)
@@ -64,17 +93,19 @@ def refine_point_lsq(img, guess, cutregion=None, fun=gaussian, maxmove=5):
     """
 
     # cut around blob
-    idxes = [tuple(range((max(guess_[i] - cutregion[i], 0)), min(guess_[i] + cutregion[i] + 1, img_.shape[i]))) for i in range(len(guess))]
-    cut = img_[np.ix_(*idxes)]
+    slices = tuple(slice(max(guess_[i] - cutregion[i], 0), min(guess_[i] + cutregion[i] + 1, img_.shape[i])) for i in range(len(guess)))
+    cut = img_[slices]
 
     # initial guess for gaussian parameters
     guess_ = initial_guess_gaussian(cut)
 
+    idxs_cut = np.array([idx for idx in np.ndindex(cut.shape)], dtype=float)
+
     # try to optimize, return guess if optimization fails
     try:
         res = curve_fit(fun,
-                        np.array([idx for idx in np.ndindex(cut.shape)],
-                                 dtype=float), cut.ravel(),
+                        idxs_cut,
+                        cut.ravel(),
                         guess_)
     except (OptimizeWarning, RuntimeError, ValueError) as e:
         return guess, None
