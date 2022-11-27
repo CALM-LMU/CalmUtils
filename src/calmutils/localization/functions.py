@@ -1,4 +1,4 @@
-from .gaussian_fit import initial_guess_gaussian, gaussian
+from .gaussian_fit import initial_guess_gaussian, gaussian_nd
 import numpy as np
 
 class LorentzianNoCov:
@@ -63,7 +63,7 @@ class GaussianNoCov:
 
     def __call__(self, x, *params):
         _x = x * np.array(self.pixelsize) + np.array(self.offset)
-        return gaussian(_x, *params)
+        return gaussian_nd(_x, *params)
 
     def num_parameters(self):
         # min, max, mus, sigs
