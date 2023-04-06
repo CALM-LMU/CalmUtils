@@ -1,5 +1,6 @@
 from scipy import ndimage as ndi
 from skimage.feature import peak_local_max
+from skimage._shared.coord import ensure_spacing
 import numpy as np
 
 from .util import sig_to_full_width_at_quantile
@@ -57,6 +58,10 @@ def detect_dog(img, threshold, sigma=None, fwhm=None, pixsize=None, steps_per_oc
     if pixsize is not None:
         sigma /= (np.array(pixsize) if not np.isscalar(pixsize) else np.array([pixsize] * len(img.shape)))
 
+
+    # convert to float to avoid quantization artifacts
+    img = img.astype(float)
+    
     # image might already have a scale, assume 0.5 by default
     if img_sigma is None:
         img_sigma = np.ones_like(sigma) * 0.5
@@ -73,9 +78,20 @@ def detect_dog(img, threshold, sigma=None, fwhm=None, pixsize=None, steps_per_oc
     dog = g1 - g2
     dog /= np.max(dog)
 
+    # find peaks, note: no minimal distance enforced yet
+    peaks = peak_local_max(dog, min_distance=1, threshold_abs=threshold, exclude_border=False)
+
     # exclude points that are closer than fwhm (in dimension with highest fwhm)
-    mindist = int(np.round(np.max(sig_to_full_width_at_quantile(sigma))))
-    peaks = peak_local_max(dog, min_distance=mindist, threshold_abs=threshold, exclude_border=False)
+    mindist = np.max(sig_to_full_width_at_quantile(sigma))
+    
+    # scale coords of peaks relative to maximal sigma
+    rel_scale = sigma / np.max(sigma)
+    peaks = peaks.astype(float) * rel_scale
+    # exclude closer than FWHM
+    # TODO: using private function from skimage here, might break in updates
+    peaks = ensure_spacing(peaks, mindist, p_norm=2.0)
+    # back to original coords and int
+    peaks = np.round(peaks / rel_scale).astype(int)
 
     # return as list
     return [peak for peak in list(peaks)]
