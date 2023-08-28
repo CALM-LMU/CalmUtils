@@ -1,1 +1,1 @@
-from .ellipse_plot import get_ellipse_params, sig_to_full_width_at_quantile
+from .ellipse_plot import get_ellipse_params, sigma_to_full_width_at_quantile, sig_to_full_width_at_quantile, full_width_at_quantile_to_sigma
