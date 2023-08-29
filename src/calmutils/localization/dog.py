@@ -3,7 +3,7 @@ from skimage.feature import peak_local_max
 from skimage._shared.coord import ensure_spacing
 import numpy as np
 
-from .util import sig_to_full_width_at_quantile
+from .util import sigma_to_full_width_at_quantile
 
 
 def detect_dog(img, threshold, sigma=None, fwhm=None, pixsize=None, steps_per_octave=4, img_sigma=None):
@@ -50,7 +50,7 @@ def detect_dog(img, threshold, sigma=None, fwhm=None, pixsize=None, steps_per_oc
         raise ValueError('Please provide either sigma or fwhm estimate')
     elif sigma is None:
         fwhm = np.array(fwhm) if not np.isscalar(fwhm) else np.array([fwhm] * len(img.shape))
-        sigma = fwhm / sig_to_full_width_at_quantile(np.ones_like(fwhm))
+        sigma = fwhm / sigma_to_full_width_at_quantile(np.ones_like(fwhm))
     elif fwhm is None:
         sigma = np.array(sigma) if not np.isscalar(sigma) else np.array([sigma] * len(img.shape))
 
@@ -82,7 +82,7 @@ def detect_dog(img, threshold, sigma=None, fwhm=None, pixsize=None, steps_per_oc
     peaks = peak_local_max(dog, min_distance=1, threshold_abs=threshold, exclude_border=False)
 
     # exclude points that are closer than fwhm (in dimension with highest fwhm)
-    mindist = np.max(sig_to_full_width_at_quantile(sigma))
+    mindist = np.max(sigma_to_full_width_at_quantile(sigma))
     
     # scale coords of peaks relative to maximal sigma
     rel_scale = sigma / np.max(sigma)

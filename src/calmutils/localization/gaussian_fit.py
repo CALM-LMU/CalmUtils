@@ -73,11 +73,11 @@ def refine_point_lsq(img, guess, cutregion=None, fun=None, maxmove=5):
             fun = gaussian_nd
 
     img_ = img
-    guess_ = np.array(guess, dtype=np.int)
+    guess_ = np.array(guess, dtype=int)
 
     # default cut: 5px in each direction
     if cutregion is None:
-        cutregion = np.ones((len(img.shape),), dtype=np.int)*5
+        cutregion = np.ones((len(img.shape),), dtype=int)*5
 
     # make sure cutregion is np.array
     cutregion = np.array(cutregion)
@@ -133,7 +133,7 @@ def main():
         for shift in [[-7.8, 6.1]]:
             img_ = ndi.gaussian_filter(img, sigs)
             img_ = ndi.shift(img_, shift)
-            loc, fit = refine_point_lsq(img_, (np.array([10,10]) + np.round(np.array(shift))).astype(np.int), [7,7])
+            loc, fit = refine_point_lsq(img_, (np.array([10,10]) + np.round(np.array(shift))).astype(int), [7,7])
             print((np.array([10, 10]) + np.array(shift)) - loc)
 
 if __name__ == '__main__':
