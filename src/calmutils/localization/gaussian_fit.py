@@ -2,6 +2,8 @@ import numpy as np
 from scipy.optimize import curve_fit, OptimizeWarning
 from numba import njit
 
+from ..misc.selections import safe_rectangular_selection
+
 def initial_guess_gaussian(cut):
     '''
     guess min, max, mu_0, ..., mu_n, sigma_0, ..., sigma_n
@@ -93,7 +95,10 @@ def refine_point_lsq(img, guess, cutregion=None, fun=None, maxmove=5):
     """
 
     # cut around blob
-    slices = tuple(slice(max(guess_[i] - cutregion[i], 0), min(guess_[i] + cutregion[i] + 1, img_.shape[i])) for i in range(len(guess)))
+
+
+    slices = safe_rectangular_selection(img_, guess_, cutregion*2+1)
+    # slices = tuple(slice(max(guess_[i] - cutregion[i], 0), min(guess_[i] + cutregion[i] + 1, img_.shape[i])) for i in range(len(guess)))
     cut = img_[slices]
 
     # initial guess for gaussian parameters
