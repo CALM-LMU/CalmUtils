@@ -12,6 +12,7 @@ setup(
               'calmutils.descriptors',
               'calmutils.filter',
               'calmutils.imageio',
+              'calmutils.imageio.nd2_helpers',
               'calmutils.localization',
               'calmutils.localization.util',
               'calmutils.localization.multiview',
@@ -26,7 +27,9 @@ setup(
         'scipy',
         'scikit-image',
         'Pillow',
-        'numba'
+        'numba',
+        'nd2',
+        'nd2reader'
     ],
     package_dir={'' : './src'}
 )

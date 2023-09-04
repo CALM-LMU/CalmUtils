@@ -6,7 +6,7 @@ import pims
 # override download_jar_ default parameters to download last release of loci_tools
 pims.bioformats.download_jar.__defaults__ = ('6.7', )
 
-def read_msr_bioformats(file, series_to_read):
+def read_msr_bioformats(file, series_to_read=None):
 
     data = {}
 
@@ -17,7 +17,10 @@ def read_msr_bioformats(file, series_to_read):
         # read .msr file with Bioformats
         with pims.Bioformats(file) as reader:
             
-            # for i in range(reader.size_series):
+            # if no series indices are given, load all
+            if series_to_read is None:
+                series_to_read = range(reader.size_series)
+
             for i in series_to_read:
                 
                 # set series
