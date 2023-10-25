@@ -1,12 +1,14 @@
+import warnings
 from scipy import ndimage as ndi
 from skimage.feature import peak_local_max
 from skimage._shared.coord import ensure_spacing
 import numpy as np
 
-from .util import sigma_to_full_width_at_quantile
+from .util import sigma_to_full_width_at_quantile, full_width_at_quantile_to_sigma
 
 
-def detect_dog(img, threshold, sigma=None, fwhm=None, pixsize=None, steps_per_octave=4, img_sigma=None):
+def detect_dog(img, threshold, sigma=None, fwhm=None, pixsize=None, sigma_factor=1.15, threshold_intensity=None,
+               steps_per_octave=None, img_sigma=None, max_num_peaks=np.inf):
     """
     Difference-of-Gaussian spot detection
 
@@ -15,13 +17,13 @@ def detect_dog(img, threshold, sigma=None, fwhm=None, pixsize=None, steps_per_oc
     img: array
         image to detect peaks in
     threshold: float < 1
-        intensity threshold (in normalized Dog image) for local maxima
-        NB: we only detect maxima, to detect minima, run again with inverted image
+        intensity threshold (in normalized DoG image) for local maxima
+        NOTE: we only detect maxima. to detect minima, run again with inverted image
     sigma: array or float
         expected sigma of spots
         if a single value is given, we use it for all dimensions
         optional, you can alternatively provide fwhm
-    sigma: array or float
+    fwhm: array or float
         expected full-width-at-half-maximum of spots
         if a single value is given, we use it for all dimensions
         optional, you can alternatively provide sigma
@@ -29,48 +31,63 @@ def detect_dog(img, threshold, sigma=None, fwhm=None, pixsize=None, steps_per_oc
         pixel size, optional
         if not provided, we assuma sigma/fwhm in pixel units, otherwise in world units
         if a single value is given, we use it for all dimensions
-    steps_per_octave: int
+    sigma_factor: float
+        ratio between Gaussian blur sigmas used to compute DoG
+    threshold_intensity: int/float
+        intensity threshold in input image (after Gaussian blur with specified sigma)
+        will be applied after maxima detection in DoG image
+    steps_per_octave: int, deprecated and ignored
         number of steps per octave in a DoG-pyramid
         we use sigma1 = sigma and sigma2 = sigma * 2.0**(1/steps_per_octave) for DoG
-    img_sigma: array or float
+    img_sigma: array or float, deprecated and ignored if None
         existing blur in image, may be used to correct for anisotropy
         if a single value is given, we use it for all dimensions
         optional, if not provided we assume 0.5
         # TODO: the functionality of this parameter is a bit redundant? is this really necessary?
+    max_num_peaks: int
+        maximum number of peaks to find in DoG response, will 
 
     Returns
     -------
-    peaks: list of array
-        coordinates of the detected peaks ()
+    peaks: array of shape (n, img.ndim)
+        coordinates of the n detected peaks
 
     """
+
+    # warn about deprecated parameters
+    if steps_per_octave is not None:
+        warnings.warn('Parameter steps_per_octave is deprecated, use sigma_factor directly', DeprecationWarning)
+    if img_sigma is not None:
+        warnings.warn('Parameter img_sigma is deprecated, adjust sigma beforehand if desired', DeprecationWarning)
 
     # we have to provide a sigma or fwhm estimate
     if sigma is None and fwhm is None:
         raise ValueError('Please provide either sigma or fwhm estimate')
-    elif sigma is None:
-        fwhm = np.array(fwhm) if not np.isscalar(fwhm) else np.array([fwhm] * len(img.shape))
-        sigma = fwhm / sigma_to_full_width_at_quantile(np.ones_like(fwhm))
     elif fwhm is None:
         sigma = np.array(sigma) if not np.isscalar(sigma) else np.array([sigma] * len(img.shape))
+    elif sigma is None:
+        fwhm = np.array(fwhm) if not np.isscalar(fwhm) else np.array([fwhm] * len(img.shape))
+        sigma = full_width_at_quantile_to_sigma(fwhm)
 
     # user provided pixelsize -> assume sigma is in units
     if pixsize is not None:
         sigma /= (np.array(pixsize) if not np.isscalar(pixsize) else np.array([pixsize] * len(img.shape)))
 
-
     # convert to float to avoid quantization artifacts
     img = img.astype(float)
     
-    # image might already have a scale, assume 0.5 by default
+    # only correct for image sigma if explicitly passed as argument
     if img_sigma is None:
-        img_sigma = np.ones_like(sigma) * 0.5
-    img_sigma = np.array(img_sigma) if not np.isscalar(img_sigma) else np.array([img_sigma] * len(img.shape))
-    sigma = np.sqrt(sigma ** 2 - img_sigma ** 2)
+        # image might already have a scale, assume 0.5 by default
+        # img_sigma = np.ones_like(sigma) * 0.5
+        pass
+    else:
+        img_sigma = np.array(img_sigma) if not np.isscalar(img_sigma) else np.array([img_sigma] * len(img.shape))
+        sigma = np.sqrt(sigma ** 2 - img_sigma ** 2)
 
     # get DoG sigmas
     s1 = sigma
-    s2 = sigma * 2.0 ** (1 / steps_per_octave)
+    s2 = sigma * sigma_factor
 
     # do DoG, normalize result
     g1 = ndi.gaussian_filter(img, s1)
@@ -79,19 +96,24 @@ def detect_dog(img, threshold, sigma=None, fwhm=None, pixsize=None, steps_per_oc
     dog /= np.max(dog)
 
     # find peaks, note: no minimal distance enforced yet
-    peaks = peak_local_max(dog, min_distance=1, threshold_abs=threshold, exclude_border=False)
+    peaks = peak_local_max(dog, min_distance=1, threshold_abs=threshold, exclude_border=False, num_peaks=max_num_peaks)
 
+    if threshold_intensity is not None:
+        # filter spots with too low raw intensity
+        peaks = peaks[g1[tuple(map(list, peaks.T))] > threshold_intensity]
+
+    # NOTE: changed to scaling with FWHM in each dimension
     # exclude points that are closer than fwhm (in dimension with highest fwhm)
     mindist = np.max(sigma_to_full_width_at_quantile(sigma))
+    fwhm = sigma_to_full_width_at_quantile(sigma)
     
     # scale coords of peaks relative to maximal sigma
     rel_scale = sigma / np.max(sigma)
-    peaks = peaks.astype(float) * rel_scale
+    peaks = peaks.astype(float) / fwhm
     # exclude closer than FWHM
     # TODO: using private function from skimage here, might break in updates
-    peaks = ensure_spacing(peaks, mindist, p_norm=2.0)
+    peaks = ensure_spacing(peaks, 1, p_norm=2.0)
     # back to original coords and int
-    peaks = np.round(peaks / rel_scale).astype(int)
+    peaks = np.round(peaks * fwhm).astype(int)
 
-    # return as list
-    return [peak for peak in list(peaks)]
+    return peaks
