@@ -9,6 +9,14 @@ def get_pixel_size(file_path):
         pixel_size = reader.voxel_size()[::-1]
     return pixel_size
 
+def nd2_get_channel_names_cleaned(file_path, whitespace_replace_char='-'):
+    """
+    return list of channel (OC) names in ND2 file.
+    leading/trailing whitespaces will be stripped and internal whitespaces replaced (with '-' by default)
+    """
+    with ND2File(file_path) as reader:
+        return [s.channel.name.strip().replace(' ', whitespace_replace_char) for s in reader.metadata.channels]
+
 
 def get_z_direction(file_path):
     with ND2Reader(file_path) as reader:
@@ -24,5 +32,5 @@ if __name__ == '__main__':
     f = '/Users/david/Desktop/23AM03-02_4001.nd2'
     print(get_pixel_size(f), get_z_direction(f))
     f = '/Users/david/Desktop/Beads_single005.nd2'
-    print(get_pixel_size(f), get_z_direction(f))
+    print(get_pixel_size(f), get_z_direction(f), nd2_get_channel_names_cleaned(f))
     

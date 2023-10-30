@@ -45,7 +45,8 @@ def detect_dog(img, threshold, sigma=None, fwhm=None, pixsize=None, sigma_factor
         optional, if not provided we assume 0.5
         # TODO: the functionality of this parameter is a bit redundant? is this really necessary?
     max_num_peaks: int
-        maximum number of peaks to find in DoG response, will 
+        maximum number of peaks to find in DoG response, will be enforced before filtering based on
+        raw intensity or spacing, so actual number returned may be lower
 
     Returns
     -------
