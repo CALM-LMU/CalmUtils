@@ -90,7 +90,7 @@ def refine_point_lsq(img, guess, cutregion=None, fun=None, maxmove=5):
 
     # default cut: 5px in each direction
     if cutregion is None:
-        cutregion = np.ones((len(img.shape),), dtype=int)*5
+        cutregion = np.full((len(img.shape),), 5, dtype=int)
 
     # make sure cutregion is np.array
     cutregion = np.array(cutregion)
@@ -117,7 +117,9 @@ def refine_point_lsq(img, guess, cutregion=None, fun=None, maxmove=5):
     # initial guess for gaussian parameters
     guess_ = initial_guess_gaussian2(cut)
 
-    idxs_cut = np.array([idx for idx in np.ndindex(cut.shape)], dtype=float)
+    # idxs_cut = np.array([idx for idx in np.ndindex(cut.shape)], dtype=float)
+    # faster version without loop:
+    idxs_cut = np.stack(np.meshgrid(*(np.arange(s) for s in cut.shape), indexing='ij'), axis=-1).reshape((-1, cut.ndim)).astype(float)
 
     # try to optimize, return guess if optimization fails
     try:
