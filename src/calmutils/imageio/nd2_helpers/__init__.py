@@ -1,1 +1,1 @@
-from nd2_metadata_helpers import get_pixel_size, get_z_direction
+from .nd2_metadata_helpers import get_pixel_size, get_z_direction, nd2_get_channel_names_cleaned
