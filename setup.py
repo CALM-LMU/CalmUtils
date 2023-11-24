@@ -16,6 +16,7 @@ setup(
               'calmutils.localization',
               'calmutils.localization.util',
               'calmutils.localization.multiview',
+              'calmutils.localization.metrics',
               'calmutils.simulation',
               'calmutils.misc',
               'calmutils.misc.json',
