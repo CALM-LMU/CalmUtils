@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='CalmUtils',
-    version='0.0.15-dev',
+    version='0.0.16-dev',
     description='commonly used Python code at the Center for Advanced Light Microscopy',
     long_description=open('README.rst').read(),
     author='David Hoerl',
@@ -16,6 +16,7 @@ setup(
               'calmutils.localization',
               'calmutils.localization.util',
               'calmutils.localization.multiview',
+              'calmutils.localization.metrics',
               'calmutils.simulation',
               'calmutils.misc',
               'calmutils.misc.json',
