@@ -8,7 +8,7 @@ from .util import sigma_to_full_width_at_quantile, full_width_at_quantile_to_sig
 
 
 def detect_dog(img, threshold, sigma=None, fwhm=None, pixsize=None, sigma_factor=1.15, threshold_intensity=None,
-               steps_per_octave=None, img_sigma=None, max_num_peaks=np.inf):
+               steps_per_octave=None, img_sigma=None, max_num_peaks=np.inf, threshold_relative=True):
     """
     Difference-of-Gaussian spot detection
 
@@ -47,6 +47,8 @@ def detect_dog(img, threshold, sigma=None, fwhm=None, pixsize=None, sigma_factor
     max_num_peaks: int
         maximum number of peaks to find in DoG response, will be enforced before filtering based on
         raw intensity or spacing, so actual number returned may be lower
+    threshold_relative: bool
+        whether to consider threshold relative to maximum DoG filter response
 
     Returns
     -------
@@ -87,14 +89,16 @@ def detect_dog(img, threshold, sigma=None, fwhm=None, pixsize=None, sigma_factor
         sigma = np.sqrt(sigma ** 2 - img_sigma ** 2)
 
     # get DoG sigmas
-    s1 = sigma
-    s2 = sigma * sigma_factor
+    s1 = sigma / np.sqrt(sigma_factor)
+    s2 = sigma * np.sqrt(sigma_factor)
 
     # do DoG, normalize result
     g1 = ndi.gaussian_filter(img, s1)
     g2 = ndi.gaussian_filter(img, s2)
     dog = g1 - g2
-    dog /= np.max(dog)
+
+    if threshold_relative:
+        dog /= np.max(dog)
 
     # find peaks, note: no minimal distance enforced yet
     peaks = peak_local_max(dog, min_distance=1, threshold_abs=threshold, exclude_border=False, num_peaks=max_num_peaks)
