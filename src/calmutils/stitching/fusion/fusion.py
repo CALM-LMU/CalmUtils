@@ -2,6 +2,9 @@ from functools import reduce
 from itertools import tee, product
 from concurrent.futures import ThreadPoolExecutor
 
+from ..phase_correlation import get_axes_aligned_bbox
+from scipy.interpolate import RegularGridInterpolator
+
 import numpy as np
 
 def subsample_image(image, ds_factor=2):
@@ -29,13 +32,13 @@ def range_includelast(min_, max_, step=1):
         yield c
         c += step
     yield max_
-    
 
-def fuse_image(bbox, images, transformations, weights=None, oob_val=0, block_size=None, dtype=None):
+
+def fuse_image_wrapper(bbox, images, transformations, weights=None, oob_val=0, block_size=None, dtype=None, interpolation_mode='nearest'):
 
     # no blocking necessary
     if block_size is None:
-        return fuse_image_(bbox, images, transformations, weights, oob_val, dtype)
+        return fuse_image(bbox, images, transformations, weights, oob_val, dtype, interpolation_mode)
 
     # allocate final array
     res = np.zeros(tuple((ma_ - mi_ for mi_, ma_ in bbox)), dtype=dtype if dtype is not None else images[0].dtype)
@@ -46,7 +49,7 @@ def fuse_image(bbox, images, transformations, weights=None, oob_val=0, block_siz
 
     # do multi-threaded
     tpe = ThreadPoolExecutor()
-    futures = [tpe.submit(fuse_image_, bbox_, images, transformations, weights, oob_val, dtype) for bbox_ in p]
+    futures = [tpe.submit(fuse_image, bbox_, images, transformations, weights, oob_val, dtype, interpolation_mode) for bbox_ in p]
 
     # paste to result, take global offset into account
     for f, bbox_ in zip(futures, p):
@@ -55,15 +58,11 @@ def fuse_image(bbox, images, transformations, weights=None, oob_val=0, block_siz
     tpe.shutdown()
     return res
 
-def fuse_image_(bbox, images, transformations, weights=None, oob_val=0, dtype=None):
 
-    # create output coordinates
-    coords = np.meshgrid(*[range(mi,ma) for mi,ma in bbox], indexing='ij')
-    coords = np.stack(coords + [np.ones(coords[0].shape, dtype=coords[0].dtype)], -1)
+def fuse_image(bbox, images, transformations, weights=None, oob_val=0, dtype=None, interpolation_mode='nearest'):
 
-    # shape of output + ndim
-    init_shape = coords.shape
-    coords = coords.reshape((np.prod(coords.shape[:-1]), coords.shape[-1]))
+    # shape of output
+    out_shape = tuple(ma - mi for mi, ma in bbox)
 
     # ensure we have a list of imgs, transforms even if just one given
     if not isinstance(transformations, list):
@@ -77,33 +76,42 @@ def fuse_image_(bbox, images, transformations, weights=None, oob_val=0, dtype=No
     if not isinstance(weights, list):
         weights = [weights]
 
-    # prepare output
-    res_w = np.zeros(init_shape[:-1]) # TODO: dtype?
+    # prepare output weights
+    res_w = np.zeros(out_shape) # TODO: dtype?
     # NB: do this in float, otherwise we might get rounding errors
-    res = np.zeros(init_shape[:-1]) #, dtype=dtype if dtype is not None else images[0].dtype)
+    res = np.zeros(out_shape) #, dtype=dtype if dtype is not None else images[0].dtype)
 
-    # iter images, transforms
-    for (i, mat) in enumerate(transformations):
-        coords_i = coords @ np.linalg.inv(mat).transpose()
-        coords_i = np.take(coords_i, range(len(bbox)), -1)
+    # iter images, weights, transforms
+    for (img, weight, mat) in zip(images, weights, transformations):
 
-        # TODO: interpolation?
-        oob_i = np.any((coords_i >= images[i].shape) + (coords_i < (0)*images[i].ndim), -1)
-        coords_i = coords_i.astype(np.int)
+        # check which rectangular part of final image is affected by "pasting" transformed input
+        mins_i, maxs_i = get_axes_aligned_bbox([img.shape], [mat])
+        mins_i = np.max([mins_i.astype(int), [mi for mi, _ in bbox]], axis=0)
+        maxs_i = np.min([maxs_i.astype(int), [ma for _, ma in bbox]], axis=0)
 
-        idx_i = np.ravel_multi_index(tuple([np.take(coords_i, j, -1) for j in range(images[i].ndim)]),
-                               images[i].shape, mode='clip')
+        # no update necessary
+        if any(mi>=ma for mi, ma in zip(mins_i,maxs_i)):
+            continue
 
-        # take flat idxes from original image
-        res_i = images[i].flat[idx_i]
-        if weights is not None:
-            weights_i = weights[i].flat[idx_i]
-            weights_i[oob_i] = oob_val
-            res_i = res_i * weights_i
-            res_w += weights_i.reshape(init_shape[:-1])
-        # set oob to predefined value
-        res_i[oob_i] = oob_val
-        res += res_i.reshape(init_shape[:-1])
+        # slices into output array
+        slices = tuple(slice(mi-gm,ma-gm) for mi,ma,gm in zip(mins_i, maxs_i, [mi for mi, _ in bbox]))
+
+        # transform coords of patch
+        coords_i = np.meshgrid(*[np.arange(mi,ma) for mi,ma in zip(mins_i, maxs_i)], indexing='ij')
+        # augment coords, apply transform, remove augmented again
+        coords_i = np.stack(coords_i + [np.ones(coords_i[0].shape, dtype=coords_i[0].dtype)], -1)
+        coords_i_tr = coords_i @ np.linalg.inv(mat).transpose()
+        coords_i_tr = np.take(coords_i_tr, range(img.ndim), -1)
+
+        # interpolator into image and weight arrays
+        img_interp = RegularGridInterpolator(tuple(np.arange(s) for s in img.shape), img, bounds_error=False, fill_value=oob_val, method=interpolation_mode)
+        weight_interp = RegularGridInterpolator(tuple(np.arange(s) for s in weight.shape), weight, bounds_error=False, fill_value=0, method=interpolation_mode)
+
+        # get values / weights, add to result arrays
+        vals = img_interp(coords_i_tr)
+        w = weight_interp(coords_i_tr)
+        res[slices] += vals * w
+        res_w[slices] += w
 
     # only divide by nonzero
     res[res_w != 0] = res[res_w != 0] / res_w[res_w != 0]        
