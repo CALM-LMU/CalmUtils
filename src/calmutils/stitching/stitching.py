@@ -1,5 +1,5 @@
 import numpy as np
-from skimage.feature import register_translation
+from .phase_correlation import phasecorr_align
 
 
 def get_image_overlaps(img1, img2, off_1=None, off_2=None):
@@ -80,28 +80,22 @@ def get_shift(img1, img2, off_1=None, off_2=None):
 
     ol = get_image_overlaps(img1, img2, off_1, off_2)
 
+    # images do not overlap according to their offsets -> return input
     if ol is None:
         return (off_1, off_2, None)
 
+    # ol are two min-max bounding boxes, use to select overlaping regions from images
     r_min_1, r_max_1, r_min_2, r_max_2 = ol
     cut1 = img1[tuple(map(lambda x: slice(*x), zip(r_min_1, r_max_1)))]
     cut2 = img2[tuple(map(lambda x: slice(*x), zip(r_min_2, r_max_2)))]
 
-    shift_cut, _, _ = register_translation(cut2, cut1)
+    shift_cut, corr = phasecorr_align(cut2, cut1)
     ol_registered = get_image_overlaps(img1, img2, off_1, np.array(off_2) - shift_cut)
 
     # no overlap after registration -> return metadata
     if ol_registered is None:
         return (off_1, off_2, None)
 
-    # cut new overlap and get correlation
-    r_min_1, r_max_1, r_min_2, r_max_2 = ol
-    cut1 = img1[tuple(map(lambda x: slice(*x), zip(r_min_1, r_max_1)))]
-    cut2 = img2[tuple(map(lambda x: slice(*x), zip(r_min_2, r_max_2)))]
-
-    # np.corrcoeff gives correlation matrix,
-    # we get the x-y correlation
-    corr = np.corrcoef(cut1.ravel(), cut2.ravel())[0,1]
     return np.array(off_1), np.array(off_2) - shift_cut, corr
 
 
