@@ -22,7 +22,8 @@ setup(
               'calmutils.misc.json',
               'calmutils.morphology',
               'calmutils.stitching',
-              'calmutils.stitching.fusion'],
+              'calmutils.stitching.fusion',
+              'calmutils.color'],
     install_requires=[
         'numpy',
         'scipy',
