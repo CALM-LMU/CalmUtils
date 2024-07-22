@@ -4,6 +4,7 @@ import warnings
 import numpy as np
 
 from ..localization import refine_point
+from calmutils.stitching import translation_matrix
 
 def get_axes_aligned_overlap(shape1, shape2, transform1=None, transform2=None):
 
@@ -36,10 +37,6 @@ def get_axes_aligned_bbox(shapes, transforms):
     maxs = np.max(maxs, axis=0)
     return mins[:-1], maxs[:-1]
 
-def get_transform_from_shift(shift):
-    tr = np.eye(len(shift) + 1)
-    tr[:-1,-1] = shift
-    return tr
 
 def phasecorr_align(img1, img2, subpixel=False):
 
@@ -67,8 +64,8 @@ def phasecorr_align(img1, img2, subpixel=False):
         for off_i in list(product(*zip([0] * len(pcm.shape), pcm.shape))):
 
             shift_i = shifts - np.array(off_i)
-            min_1, max_1 = get_axes_aligned_overlap(img1.shape, img2.shape, transform2=get_transform_from_shift(shift_i))
-            min_2, max_2 = get_axes_aligned_overlap(img1.shape, img2.shape, transform2=get_transform_from_shift(-shift_i))
+            min_1, max_1 = get_axes_aligned_overlap(img1.shape, img2.shape, transform2=translation_matrix(shift_i))
+            min_2, max_2 = get_axes_aligned_overlap(img1.shape, img2.shape, transform2=translation_matrix(-shift_i))
             min_1, min_2, max_1, max_2 = (np.round(arg).astype(np.int) for arg in (min_1, min_2, max_1, max_2))
 
             patch1 = img1[tuple((slice(mi, ma) for mi, ma in zip(min_1, max_1)))]
@@ -131,8 +128,8 @@ try:
                 for off_i in list(product(*zip([0] * len(pcm.shape), pcm.shape))):
 
                     shift_i = shifts - np.array(off_i)
-                    min_1, max_1 = get_axes_aligned_overlap(img1.shape, img2.shape, transform2=get_transform_from_shift(shift_i))
-                    min_2, max_2 = get_axes_aligned_overlap(img1.shape, img2.shape, transform2=get_transform_from_shift(-shift_i))
+                    min_1, max_1 = get_axes_aligned_overlap(img1.shape, img2.shape, transform2=translation_matrix(shift_i))
+                    min_2, max_2 = get_axes_aligned_overlap(img1.shape, img2.shape, transform2=translation_matrix(-shift_i))
                     min_1, min_2, max_1, max_2 = (np.round(arg).astype(np.int) for arg in (min_1, min_2, max_1, max_2))
 
                     patch1 = img1_[tuple((slice(mi, ma) for mi, ma in zip(min_1, max_1)))]
