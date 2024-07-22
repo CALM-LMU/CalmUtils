@@ -1,3 +1,3 @@
-from .stitching import stitch
-from .phase_correlation import get_axes_aligned_bbox, get_axes_aligned_overlap
+from calmutils.stitching.stitching import stitch
+from calmutils.stitching.phase_correlation import get_axes_aligned_bbox, get_axes_aligned_overlap
 from calmutils.stitching.transform_helpers import translation_matrix, scale_matrix

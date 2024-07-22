@@ -1,5 +1,5 @@
 import numpy as np
-from .phase_correlation import phasecorr_align
+from calmutils.stitching.phase_correlation import phasecorr_align
 
 
 def get_image_overlaps(img1, img2, off_1=None, off_2=None):

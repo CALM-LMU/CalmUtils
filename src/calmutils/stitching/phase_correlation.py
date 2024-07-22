@@ -3,8 +3,8 @@ import warnings
 
 import numpy as np
 
-from ..localization import refine_point
-from calmutils.stitching import translation_matrix
+from calmutils.localization.quadratic import refine_point
+from calmutils.stitching.transform_helpers import translation_matrix
 
 def get_axes_aligned_overlap(shape1, shape2, transform1=None, transform2=None):
 
