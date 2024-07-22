@@ -20,6 +20,7 @@ setup(
               'calmutils.simulation',
               'calmutils.misc',
               'calmutils.misc.json',
+              'calmutils.misc.visualization',
               'calmutils.morphology',
               'calmutils.stitching',
               'calmutils.stitching.fusion',
