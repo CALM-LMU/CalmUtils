@@ -122,9 +122,9 @@ def get_fused_shape(imgs, offs):
     maxs = np.array([np.array(off) + np.array(img.shape) for (off, img) in zip(offs, imgs)])
     mins = np.apply_along_axis(np.min, 0, mins)
     maxs = np.apply_along_axis(np.max, 0, maxs)
-    shape = tuple((maxs - mins).astype(np.int)) + (len(imgs),)
+    shape = tuple((maxs - mins).astype(int)) + (len(imgs),)
 
-    return shape, mins.astype(np.int)
+    return shape, mins.astype(int)
 
 
 def fuse(imgs, offs, fun=np.max, cval=-1):
