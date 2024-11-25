@@ -32,7 +32,6 @@ setup(
         'Pillow',
         'numba',
         'nd2',
-        'nd2reader'
     ],
     package_dir={'' : './src'}
 )

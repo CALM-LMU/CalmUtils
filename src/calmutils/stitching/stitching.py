@@ -1,5 +1,11 @@
+from math import floor, ceil
+from itertools import combinations
+
 import numpy as np
+
 from calmutils.stitching.phase_correlation import phasecorr_align
+from calmutils.stitching.transform_helpers import translation_matrix
+from calmutils.stitching.registration import register_translations
 
 
 def get_image_overlaps(img1, img2, off_1=None, off_2=None):
@@ -17,7 +23,7 @@ def get_image_overlaps(img1, img2, off_1=None, off_2=None):
     Returns
     -------
     r_min_1, r_max_1, r_min_2, r_max_2: lists of int
-        minima and maxima of bounding box in local coordiantes of each image
+        minima and maxima of bounding box in local coordinates of each image
 
     """
 
@@ -44,59 +50,68 @@ def get_image_overlaps(img1, img2, off_1=None, off_2=None):
         if max_ol <= min_ol:
             return None
 
-        r_min_1.append(min_ol - off_1[d])
-        r_min_2.append(min_ol - off_2[d])
-        r_max_1.append(max_ol - off_1[d])
-        r_max_2.append(max_ol - off_2[d])
+        r_min_1.append(floor(min_ol - off_1[d]))
+        r_min_2.append(floor(min_ol - off_2[d]))
+        r_max_1.append(ceil(max_ol - off_1[d]))
+        r_max_2.append(ceil(max_ol - off_2[d]))
 
     return r_min_1, r_max_1, r_min_2, r_max_2
 
 
-def get_shift(img1, img2, off_1=None, off_2=None):
+def phasecorr_align_overlapping_region(img1, img2, off_1=None, off_2=None, subpixel=False, return_relative_shift=False):
     """
-    Get the translation between two images via phase correlation in the overlapping area via phase correlation
+    Get the translation between two images via phase correlation in the overlapping area.
+    If offsets are provided, we will only process overlapping region for speedup.
 
     Parameters
     ----------
     img1, img2: arrays
-        input images
+        input images (img1: target, img2: moving)
     off_1, off_2: 1d-arrays
         estimated (e.g. metadata offset of images)
         optional, we assume no offset if not provided
+    subpixel: bool
+        whether to do subpixel-accurate phase correlation
+    return_relative_shift: bool
+        whether to return relative shift (to be applied on top of existing offset)
+        or absolute shift (including existing offset)
 
     Returns
     -------
-    r_off1, r_off2: 1d-arrays
-        registered offsets of the images (r_off1 is equal to off_1)
+    registered_offset: 1d-arrays
+        registered offset of the moving image (img2)
     corr: float
         cross-correlation of the images after registration, may be None if we could not register
     """
 
+    # default to no offsets
     if off_1 is None:
         off_1 = [0] * len(img1.shape)
-
     if off_2 is None:
         off_2 = [0] * len(img1.shape)
 
+    # check overlap
     ol = get_image_overlaps(img1, img2, off_1, off_2)
-
     # images do not overlap according to their offsets -> return input
     if ol is None:
-        return (off_1, off_2, None)
+        return off_2, None
 
-    # ol are two min-max bounding boxes, use to select overlaping regions from images
+    # ol are two min-max bounding boxes, use to select overlapping regions from images
     r_min_1, r_max_1, r_min_2, r_max_2 = ol
     cut1 = img1[tuple(map(lambda x: slice(*x), zip(r_min_1, r_max_1)))]
     cut2 = img2[tuple(map(lambda x: slice(*x), zip(r_min_2, r_max_2)))]
 
-    shift_cut, corr = phasecorr_align(cut2, cut1)
-    ol_registered = get_image_overlaps(img1, img2, off_1, np.array(off_2) - shift_cut)
+    # calculate phasecorr in overlap, add to original offset for absolute shift
+    shift_relative, corr = phasecorr_align(cut1, cut2, subpixel=subpixel)
+    shift_absolute = np.array(off_2) + shift_relative
 
+    # sanity-check resulting overlap again
+    ol_registered = get_image_overlaps(img1, img2, off_1, shift_absolute)
     # no overlap after registration -> return metadata
     if ol_registered is None:
-        return (off_1, off_2, None)
+        return off_2, None
 
-    return np.array(off_1), np.array(off_2) - shift_cut, corr
+    return shift_relative if return_relative_shift else shift_absolute, corr
 
 
 def get_fused_shape(imgs, offs):
@@ -163,53 +178,52 @@ def fuse(imgs, offs, fun=np.max, cval=-1):
     return res, mi
 
 
-def stitch(ref_img, imgs, ref_off=None, offs=None, cval=-1, corr_thresh=0.5):
-    """
-    Simple translational registration of a set of images to a reference image
-    Only comparisions to reference are done, not within the other images
+def stitch(images, positions=None, corr_thresh=0.5, subpixel=False, return_shift_vectors=False):
 
-    Parameters
-    ----------
-    ref_img: array
-        reference image
-    imgs: list of arrays
-        images to register
-    ref_off: 1d-array-like of int
-        offset of reference image, optional
-    offs: list of 1d-array-like of int
-        offsets of images to register, optional
-    cval: float
-        constant background value, -1 by default
-    corr_thresh: float
-        minimal corralation coefficient between images after registration,
-        if it is below threshold, we will keep metadata
+    # when no positions are given, assume all images at origin (will check all possible pairs)
+    if positions is None:
+        positions = [np.zeros(images[0].ndim)] * len(images)
 
-    Returns
-    -------
-    fused: array
-        fused image
-    shifts: list of 1d-array-like of int
-        registered offsets of all images (reference, img0, img1, ...)
-    off: 1d-array-like
-        offset of fused image (coordinates of origin)
-    corrs: list of float
-        correlation coefficients of imgs to ref_img after registration
-        will be None if registration failed or was rejected because of threshold
+    # pairwise transform estimation
+    global_registration_input = {}
+    for idx1, idx2 in combinations(range(len(images)), 2):
 
-    """
+        img1, img2 = images[idx1], images[idx2]
+        position1, position2 = positions[idx1], positions[idx2]
+        shift, corr = phasecorr_align_overlapping_region(img1, img2, position1, position2, subpixel=subpixel,
+                                                         return_relative_shift=True)
 
-    if ref_off is None:
-        ref_off = [0] * len(ref_img.shape)
-    shifts = []
-    corrs = []
-    for i, img in enumerate(imgs):
-        _, shift, corr = get_shift(ref_img, img, ref_off, None if offs is None else offs[i])
-        if corr is None or corr < corr_thresh:
-            shifts.append([0]*len(img.shape) if offs is None else offs[i])
-            corrs.append(None)
+        # we have a shift with good enough correlation
+        if corr is not None and corr > corr_thresh:
+            # make dummy "point matches" from image corners for global registration
+            # it does not really matter which points we use as long as they don't lie along the same axis
+            corners = np.stack(np.meshgrid(*((0, s) for s in img1.shape), indexing='ij'), -1, dtype=float).reshape(
+                -1, img1.ndim)
+
+            # shift "matched points" in img2
+            corners_shifted = corners - shift
+
+            # add image pair and matches to global registration input
+            global_registration_input[(idx1, idx2)] = (corners, corners_shifted)
+
+    # run global registration, result is idx -> transformation matrix
+    fixed_idx = 0
+    global_registration_results = register_translations(global_registration_input, [fixed_idx])
+
+    # map to list, re-add missing
+    transforms = []
+    for idx in range(len(images)):
+        # idx is missing from registration results -> use original offset (e.g. metadata)
+        if not idx in global_registration_results:
+            transforms.append(translation_matrix(positions[idx]))
         else:
-            shifts.append(shift)
-            corrs.append(corr)
+            # append local shift result to global offset
+            tr = global_registration_results[idx]
+            tr = translation_matrix(-positions[fixed_idx]) @ translation_matrix(positions[idx]) @ tr
+            transforms.append(tr)
 
-    fus, off = fuse([ref_img] + imgs, [ref_off] + shifts, cval=cval)
-    return fus, [ref_off] + shifts, off, corrs
+    # return either just the shift vectors or full transformation matrices
+    if return_shift_vectors:
+        return [tr[:-1, -1] for tr in transforms]
+    else:
+        return transforms
