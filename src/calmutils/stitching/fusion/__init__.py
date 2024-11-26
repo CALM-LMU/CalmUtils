@@ -1,1 +1,1 @@
-from .fusion import subsample_image, fuse_image, fuse_image_wrapper
+from .fusion import subsample_image, fuse_image, fuse_image_blockwise

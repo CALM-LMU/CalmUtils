@@ -58,7 +58,7 @@ def get_image_overlaps(img1, img2, off_1=None, off_2=None):
     return r_min_1, r_max_1, r_min_2, r_max_2
 
 
-def phasecorr_align_overlapping_region(img1, img2, off_1=None, off_2=None, subpixel=False, return_relative_shift=False):
+def phasecorr_align_overlapping_region(img1, img2, off_1=None, off_2=None, subpixel=False, return_relative_shift=False, min_overlap=None):
     """
     Get the translation between two images via phase correlation in the overlapping area.
     If offsets are provided, we will only process overlapping region for speedup.
@@ -84,6 +84,8 @@ def phasecorr_align_overlapping_region(img1, img2, off_1=None, off_2=None, subpi
         cross-correlation of the images after registration, may be None if we could not register
     """
 
+    no_offsets_provided = off_1 is None and off_2 is None
+
     # default to no offsets
     if off_1 is None:
         off_1 = [0] * len(img1.shape)
@@ -101,8 +103,14 @@ def phasecorr_align_overlapping_region(img1, img2, off_1=None, off_2=None, subpi
     cut1 = img1[tuple(map(lambda x: slice(*x), zip(r_min_1, r_max_1)))]
     cut2 = img2[tuple(map(lambda x: slice(*x), zip(r_min_2, r_max_2)))]
 
+    # defaults for minimal overlap
+    # when no offsets (overlapping region) are given: min 2.5% of image in all dimensions
+    # when we have overlapping regions: min 25% of image
+    if min_overlap is None:
+        min_overlap = np.array(cut1.shape) * 0.025 if no_offsets_provided else np.array(cut1.shape) * 0.25
+
     # calculate phasecorr in overlap, add to original offset for absolute shift
-    shift_relative, corr = phasecorr_align(cut1, cut2, subpixel=subpixel)
+    shift_relative, corr = phasecorr_align(cut1, cut2, subpixel=subpixel, min_overlap=min_overlap)
     shift_absolute = np.array(off_2) + shift_relative
 
     # sanity-check resulting overlap again
@@ -178,7 +186,7 @@ def fuse(imgs, offs, fun=np.max, cval=-1):
     return res, mi
 
 
-def stitch(images, positions=None, corr_thresh=0.5, subpixel=False, return_shift_vectors=False):
+def stitch(images, positions=None, corr_thresh=0.5, subpixel=False, return_shift_vectors=False, reference_idx=0):
 
     # when no positions are given, assume all images at origin (will check all possible pairs)
     if positions is None:
@@ -207,19 +215,26 @@ def stitch(images, positions=None, corr_thresh=0.5, subpixel=False, return_shift
             global_registration_input[(idx1, idx2)] = (corners, corners_shifted)
 
     # run global registration, result is idx -> transformation matrix
-    fixed_idx = 0
-    global_registration_results = register_translations(global_registration_input, [fixed_idx])
+    if len(global_registration_input) > 0:
+        # use either reference idx or the first index present in pairwise results as fixed
+        if any(idx1 == reference_idx or idx2 == reference_idx for (idx1, idx2) in global_registration_input.keys()):
+            fixed_idx_global_opt = reference_idx
+        else:
+            fixed_idx_global_opt = next((idx1 for (idx1, idx2) in global_registration_input.keys()))
+        global_registration_results = register_translations(global_registration_input, [fixed_idx_global_opt])
+    else:
+        global_registration_results = {}
 
     # map to list, re-add missing
     transforms = []
     for idx in range(len(images)):
         # idx is missing from registration results -> use original offset (e.g. metadata)
         if not idx in global_registration_results:
-            transforms.append(translation_matrix(positions[idx]))
+            transforms.append(translation_matrix(-positions[reference_idx] + positions[idx]))
         else:
             # append local shift result to global offset
             tr = global_registration_results[idx]
-            tr = translation_matrix(-positions[fixed_idx]) @ translation_matrix(positions[idx]) @ tr
+            tr = translation_matrix(-positions[reference_idx] + positions[idx]) @ tr
             transforms.append(tr)
 
     # return either just the shift vectors or full transformation matrices

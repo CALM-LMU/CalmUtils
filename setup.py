@@ -29,7 +29,7 @@ setup(
         'numpy',
         'scipy',
         'scikit-image',
-        'Pillow',
+        'matplotlib',
         'numba',
         'nd2',
     ],

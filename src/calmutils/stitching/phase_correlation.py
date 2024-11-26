@@ -38,7 +38,10 @@ def get_axes_aligned_bbox(shapes, transforms):
     return mins[:-1], maxs[:-1]
 
 
-def phasecorr_align(img1, img2, subpixel=False):
+def phasecorr_align(img1, img2, subpixel=False, min_overlap=None):
+
+    if min_overlap is None:
+        min_overlap = np.zeros(img1.ndim)
 
     freq1 = np.fft.rfftn(img1)
     freq2 = np.fft.rfftn(img2).conj()
@@ -71,8 +74,8 @@ def phasecorr_align(img1, img2, subpixel=False):
             patch1 = img1[tuple((slice(mi, ma) for mi, ma in zip(min_1, max_1)))]
             patch2 = img2[tuple((slice(mi, ma) for mi, ma in zip(min_2, max_2)))]
 
-            # skip zero volumes
-            if np.prod(patch1.shape) < 1:
+            # skip zero volumes or volumes with user-defined too small overlap
+            if np.prod(patch1.shape) < 1 or np.any(np.array(patch1.shape) < min_overlap):
                 continue
 
             # normalized ccor
