@@ -99,7 +99,7 @@ def fuse_image(bbox, images, transformations, weights=None, oob_val=0, dtype=Non
         # transform coords of patch
         coords_i = np.meshgrid(*[np.arange(mi,ma) for mi,ma in zip(mins_i, maxs_i)], indexing='ij')
         # augment coords, apply transform, remove augmented again
-        coords_i = np.stack(coords_i + (np.ones(coords_i[0].shape, dtype=coords_i[0].dtype),), -1)
+        coords_i = np.stack(tuple(coords_i) + (np.ones(coords_i[0].shape, dtype=coords_i[0].dtype),), -1)
         coords_i_tr = coords_i @ np.linalg.inv(mat).transpose()
         coords_i_tr = np.take(coords_i_tr, range(img.ndim), -1)
 
