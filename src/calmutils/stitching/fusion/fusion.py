@@ -34,11 +34,23 @@ def range_includelast(min_, max_, step=1):
     yield max_
 
 
-def fuse_image_blockwise(bbox, images, transformations, weights=None, oob_val=0, block_size=None, dtype=None, interpolation_mode='nearest'):
+def _get_default_bbox_for_fusion(images, transformations):
+    mins, maxs = get_axes_aligned_bbox([img.shape for img in images], transformations)
+    mins = np.floor(mins).astype(int)
+    maxs = np.ceil(maxs).astype(int)
+    bbox = list(zip(mins, maxs))
+    return bbox
+
+
+def fuse_image_blockwise(images, transformations, bbox=None, weights=None, oob_val=0, block_size=None, dtype=None, interpolation_mode='nearest'):
+
+    # default bounding box around all transformed images
+    if bbox is None:
+        bbox = _get_default_bbox_for_fusion(images, transformations)
 
     # no blocking necessary
     if block_size is None:
-        return fuse_image(bbox, images, transformations, weights, oob_val, dtype, interpolation_mode)
+        return fuse_image(images, transformations, bbox, weights, oob_val, dtype, interpolation_mode)
 
     # allocate final array
     res = np.zeros(tuple((ma_ - mi_ for mi_, ma_ in bbox)), dtype=dtype if dtype is not None else images[0].dtype)
@@ -49,7 +61,7 @@ def fuse_image_blockwise(bbox, images, transformations, weights=None, oob_val=0,
 
     # do multi-threaded
     tpe = ThreadPoolExecutor()
-    futures = [tpe.submit(fuse_image, bbox_, images, transformations, weights, oob_val, dtype, interpolation_mode) for bbox_ in p]
+    futures = [tpe.submit(fuse_image, images, transformations, bbox_, weights, oob_val, dtype, interpolation_mode) for bbox_ in p]
 
     # paste to result, take global offset into account
     for f, bbox_ in zip(futures, p):
@@ -59,7 +71,11 @@ def fuse_image_blockwise(bbox, images, transformations, weights=None, oob_val=0,
     return res
 
 
-def fuse_image(bbox, images, transformations, weights=None, oob_val=0, dtype=None, interpolation_mode='nearest'):
+def fuse_image(images, transformations, bbox=None, weights=None, oob_val=0, dtype=None, interpolation_mode='nearest'):
+
+    # default bounding box around all transformed images
+    if bbox is None:
+        bbox = _get_default_bbox_for_fusion(images, transformations)
 
     # shape of output
     out_shape = tuple(ma - mi for mi, ma in bbox)
