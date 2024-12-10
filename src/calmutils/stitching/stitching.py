@@ -186,7 +186,7 @@ def fuse(imgs, offs, fun=np.max, cval=-1):
     return res, mi
 
 
-def stitch(images, positions=None, corr_thresh=0.5, subpixel=False, return_shift_vectors=False, reference_idx=0):
+def stitch(images, positions=None, corr_thresh=0.7, subpixel=False, return_shift_vectors=False, reference_idx=0):
 
     # when no positions are given, assume all images at origin (will check all possible pairs)
     if positions is None:
