@@ -100,3 +100,21 @@ def get_iou(bbox1, bbox2):
     area_u = np.prod(len1) + np.prod(len2) - area_o
 
     return area_o / area_u
+
+
+def transpose_bboxes(*bboxes):
+    '''
+    transpose bounding boxes
+    e.g. turn (z0, y0, x0), (z1, y1, x1) into (z0, z1), (y0, y1), (x0, x1) or vice-versa
+    '''
+    return tuple(np.array(list(bboxes)).T)
+
+
+def minmax_to_minlen_bboxes(mins, maxs):
+    length = np.array(maxs) - np.array(mins)
+    return mins, length
+
+
+def minlen_to_minmax_bboxes(mins, lens):
+    maxs = np.array(mins) + np.array(lens)
+    return mins, maxs
