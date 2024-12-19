@@ -20,7 +20,7 @@ def centered_tiles_1d(center_position, fov_size, n_tiles, overlap):
 
 def minmax_tiles_1d(min_position, max_position, fov_size, overlap):
 
-    # swap min/max (so it work even if we swap inputs)
+    # swap min/max (so it works even if we swap inputs, e.g. flipped stage directions)
     min_position, max_position = min(min_position, max_position), max(min_position, max_position)
 
     # center of range
@@ -60,7 +60,7 @@ def alternate_axes(arr, alternate_along_axis, axes_to_alternate, offset=1):
     return arr
 
 
-def centered_tiles(center_position, fov_size, n_tiles, overlap=0, snake_rows=True):
+def centered_tiles(center_position, fov_size, n_tiles, overlap=0, snake_rows=True, flip_axes=()):
 
     # repeat length, n_tiles, overlap if only scalar value is provided
     if np.isscalar(fov_size):
@@ -78,10 +78,14 @@ def centered_tiles(center_position, fov_size, n_tiles, overlap=0, snake_rows=Tru
         # as the last dimension are the coordinates themselves, we alternate dim -2 (columns) along -3 (rows)
         grid = alternate_axes(grid, -3, -2)
 
+    # flip specified axes
+    flip_selection = tuple(slice(s, -(s+1), -1) if i in flip_axes else slice(s) for i,s in enumerate(grid.shape[:-1]))
+    grid = grid[flip_selection]
+
     return grid.reshape((-1, len(center_position)))
 
 
-def minmax_tiles(min_position, max_position, fov_size, overlap=0, snake_rows=True):
+def minmax_tiles(min_position, max_position, fov_size, overlap=0, snake_rows=True, flip_axes=()):
 
     # repeat length, overlap if only scalar value is provided
     if np.isscalar(fov_size):
@@ -96,5 +100,9 @@ def minmax_tiles(min_position, max_position, fov_size, overlap=0, snake_rows=Tru
         # alternate along rows (last two dimensions of regular grid assuming numpy zyx convention)
         # as the last dimension (-1) are the coordinates themselves, we alternate dim -2 (columns) along -3 (rows)
         grid = alternate_axes(grid, -3, -2)
+
+    # flip specified axes
+    flip_selection = tuple(slice(s, -(s+1), -1) if i in flip_axes else slice(s) for i,s in enumerate(grid.shape[:-1]))
+    grid = grid[flip_selection]
 
     return grid.reshape((-1, len(min_position)))
