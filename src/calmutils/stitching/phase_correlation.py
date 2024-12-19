@@ -1,5 +1,4 @@
 from itertools import product
-import warnings
 
 import numpy as np
 
@@ -91,68 +90,71 @@ def phasecorr_align(img1, img2, subpixel=False, min_overlap=None):
     # TODO: return PCM?
     return np.array(shift_max), ccor #, pcm
 
-try:
-    import torch
 
-    def phasecorr_align_torch(img1, img2, device=None, subpixel=False):
+def phasecorr_align_torch(img1, img2, device=None, subpixel=False, min_overlap=None):
 
-        with torch.no_grad():
-            img1_ = torch.from_numpy(img1).type(torch.FloatTensor)
-            img2_ = torch.from_numpy(img2).type(torch.FloatTensor)
-            if device is not None:
-                img1_ = img1_.to(device)
-                img2_ = img2_.to(device)
+    try:
+        import torch
+    except ImportError as e:
+        raise RuntimeError('PyTorch not installed. Install it for accelerated versions of phase correlation')
 
-            freq1 = torch.rfft(img1_, len(img1_.shape))
-            freq2 = torch.rfft(img2_, len(img2_.shape))
+    if min_overlap is None:
+        min_overlap = np.zeros(img1.ndim)
 
-            # complex conjugate
-            freq2[tuple(slice(s) for s in freq2.shape[:-1]) + (1,)] *= -1
+    with torch.no_grad():
+        img1_ = torch.from_numpy(img1).type(torch.FloatTensor)
+        img2_ = torch.from_numpy(img2).type(torch.FloatTensor)
+        if device is not None:
+            img1_ = img1_.to(device)
+            img2_ = img2_.to(device)
 
-            fccor = freq1*freq2
-            fccor1 = fccor / (torch.abs(fccor))
-            fccor1[torch.abs(fccor) < 1e-12] = 0
+        freq1 = torch.rfft(img1_, len(img1_.shape))
+        freq2 = torch.rfft(img2_, len(img2_.shape))
 
-            pcm = torch.irfft(fccor1, len(img1_.shape), signal_sizes=img1_.shape)
+        # complex conjugate
+        freq2[tuple(slice(s) for s in freq2.shape[:-1]) + (1,)] *= -1
 
-            # get ndim^2 largest values
-            _, idxs = torch.topk(pcm.flatten(), int(img1.ndim**2))
+        fccor = freq1*freq2
+        fccor1 = fccor / (torch.abs(fccor))
+        fccor1[torch.abs(fccor) < 1e-12] = 0
 
-            shift_max = None
-            ccor = None
-            for idx in idxs:
+        pcm = torch.irfft(fccor1, len(img1_.shape), signal_sizes=img1_.shape)
 
-                shifts = np.unravel_index(idx if device is None else idx.cpu(), pcm.shape)
-                shifts = np.array(shifts, dtype=int)
-                if subpixel:
-                    shifts = refine_point(pcm, shifts)
+        # get ndim^2 largest values
+        _, idxs = torch.topk(pcm.flatten(), int(img1.ndim**2))
 
-                # check the different possible positive and negative shifts
-                for off_i in list(product(*zip([0] * len(pcm.shape), pcm.shape))):
+        shift_max = None
+        ccor = None
+        for idx in idxs:
 
-                    shift_i = shifts - np.array(off_i)
-                    min_1, max_1 = get_axes_aligned_overlap(img1.shape, img2.shape, transform2=translation_matrix(shift_i))
-                    min_2, max_2 = get_axes_aligned_overlap(img1.shape, img2.shape, transform2=translation_matrix(-shift_i))
-                    min_1, min_2, max_1, max_2 = (np.round(arg).astype(int) for arg in (min_1, min_2, max_1, max_2))
+            shifts = np.unravel_index(idx if device is None else idx.cpu(), pcm.shape)
+            shifts = np.array(shifts, dtype=int)
+            if subpixel:
+                shifts = refine_point(pcm, shifts)
 
-                    patch1 = img1_[tuple((slice(mi, ma) for mi, ma in zip(min_1, max_1)))]
-                    patch2 = img2_[tuple((slice(mi, ma) for mi, ma in zip(min_2, max_2)))]
+            # check the different possible positive and negative shifts
+            for off_i in list(product(*zip([0] * len(pcm.shape), pcm.shape))):
 
-                    # skip zero volumes
-                    if np.prod(patch1.shape) < 1:
-                        continue
+                shift_i = shifts - np.array(off_i)
+                min_1, max_1 = get_axes_aligned_overlap(img1.shape, img2.shape, transform2=translation_matrix(shift_i))
+                min_2, max_2 = get_axes_aligned_overlap(img1.shape, img2.shape, transform2=translation_matrix(-shift_i))
+                min_1, min_2, max_1, max_2 = (np.round(arg).astype(int) for arg in (min_1, min_2, max_1, max_2))
 
-                    # normalized ccor
-                    patch1 = patch1 - torch.mean(patch1)
-                    patch2 = patch2 - torch.mean(patch2)
-                    ccor_i = torch.sum(patch1 * patch2) / torch.sqrt(torch.sum((patch1**2))) / torch.sqrt(torch.sum((patch2**2)))
+                patch1 = img1_[tuple((slice(mi, ma) for mi, ma in zip(min_1, max_1)))]
+                patch2 = img2_[tuple((slice(mi, ma) for mi, ma in zip(min_2, max_2)))]
 
-                    #print(shift_i, ccor_i)
-                    if ccor is None or ccor_i > ccor:
-                        ccor = ccor_i
-                        shift_max = shift_i
+                # skip zero volumes or volumes with user-defined too small overlap
+                if np.prod(patch1.shape) < 1 or np.any(np.array(patch1.shape) < min_overlap):
+                    continue
 
-        return np.array(shift_max), ccor.numpy()  if device is None else ccor.cpu().numpy()#, pcm
+                # normalized ccor
+                patch1 = patch1 - torch.mean(patch1)
+                patch2 = patch2 - torch.mean(patch2)
+                ccor_i = torch.sum(patch1 * patch2) / torch.sqrt(torch.sum((patch1**2))) / torch.sqrt(torch.sum((patch2**2)))
 
-except ImportError as e:
-    warnings.warn('PyTorch not available. Install it for accelerated versions of phase correlation')
+                #print(shift_i, ccor_i)
+                if ccor is None or ccor_i > ccor:
+                    ccor = ccor_i
+                    shift_max = shift_i
+
+    return np.array(shift_max), ccor.numpy()  if device is None else ccor.cpu().numpy()#, pcm
