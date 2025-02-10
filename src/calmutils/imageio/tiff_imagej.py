@@ -1,7 +1,9 @@
-from tifffile import imwrite
+from tifffile import imwrite, TiffFile
 import numpy as np
 
+
 IMAGEJ_AXES = 'TZCYX'
+
 
 def save_tiff_imagej(path, img, axes=None, pixel_size=None, distance_unit=None):
 
@@ -44,3 +46,27 @@ def save_tiff_imagej(path, img, axes=None, pixel_size=None, distance_unit=None):
     # #     metadata['fps']: 1/time_interval
 
     imwrite(path, img, imagej=True, resolution=resolution_xy, metadata=metadata)
+
+
+def get_imagej_tiff_pixel_size(image_path):
+    """
+    Get pixel size and unit name from ImageJ-format TIFF.
+    Following https://forum.image.sc/t/reading-pixel-size-from-image-file-with-python/74798/1
+    """
+    with TiffFile(image_path) as reader:
+
+        # error on non-ImageJ. TODO: maybe try regardless?
+        if not reader.is_imagej:
+            raise ValueError("Image does not seem to be ImageJ-format.")
+
+        # get unit and z-spacing from ImageJ metadata
+        ij_meta = reader.imagej_metadata
+        pixel_unit = ij_meta.get("unit", "pixel")
+        pixel_size = [ij_meta.get("spacing", 1.0)]
+
+        # get YX sizes from first plane tags
+        for dim in "YX":
+            num_pixels, units = reader.pages[0].tags[f'{dim}Resolution'].value
+            pixel_size.append(units / num_pixels)
+
+        return np.array(pixel_size), pixel_unit
