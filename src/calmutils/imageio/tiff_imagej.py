@@ -5,7 +5,7 @@ import numpy as np
 IMAGEJ_AXES = 'TZCYX'
 
 
-def save_tiff_imagej(path, img, axes=None, pixel_size=None, distance_unit=None):
+def save_tiff_imagej(path, img, axes=None, pixel_size=None, distance_unit=None, existing_metadata=None):
 
     """
     Convenience function to save TIFF files so basic metadata (pixel size, dimension order, ..) will be available in ImageJ.
@@ -37,7 +37,8 @@ def save_tiff_imagej(path, img, axes=None, pixel_size=None, distance_unit=None):
     img = np.transpose(img, axis_reorder_for_imagej)
 
     resolution_xy = (1/pixel_size[2], 1/pixel_size[1])
-    metadata = {'spacing': pixel_size[0], 'unit': distance_unit, 'axes': imagej_axes_subset}
+    metadata = {} if existing_metadata is None else existing_metadata
+    metadata.update({'spacing': pixel_size[0], 'unit': distance_unit, 'axes': imagej_axes_subset})
 
     # # FIXME: does not seem to show up in ImageJ
     # # time_interval = 0.1
@@ -46,6 +47,17 @@ def save_tiff_imagej(path, img, axes=None, pixel_size=None, distance_unit=None):
     # #     metadata['fps']: 1/time_interval
 
     imwrite(path, img, imagej=True, resolution=resolution_xy, metadata=metadata)
+
+
+def get_imagej_tiff_metadata(path):
+    """
+    Quick helper to get ImageJ metadata dict from a TIFF file.
+    Returns None if file is not ImageJ-format.
+    """
+    with TiffFile(path) as reader:
+        if not reader.is_imagej:
+            return None
+        return reader.imagej_metadata
 
 
 def get_imagej_tiff_pixel_size(image_path):
