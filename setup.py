@@ -22,6 +22,7 @@ setup(
               'calmutils.misc.json',
               'calmutils.misc.visualization',
               'calmutils.morphology',
+              'calmutils.segmentation',
               'calmutils.stitching',
               'calmutils.stitching.fusion',
               'calmutils.color'],
