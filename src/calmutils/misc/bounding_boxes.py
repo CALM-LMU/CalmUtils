@@ -64,21 +64,23 @@ def get_image_overlaps(img1, img2, off_1=None, off_2=None):
     r_max_2 = []
 
     for d in range(len(img1.shape)):
-        min_1 = off_1[d]
-        min_2 = off_2[d]
-        max_1 = min_1 + img1.shape[d]
-        max_2 = min_2 + img2.shape[d]
 
-        min_ol = max(min_1, min_2)
-        max_ol = min(max_1, max_2)
+        # integer difference in offsets
+        off_diff = round(abs(off_1[d] - off_2[d]))
+        # for the image with larger offset, the slice will start at 0
+        min_1, min_2 = (0, off_diff) if off_1[d] >= off_2[d] else (off_diff, 0)
 
-        if max_ol <= min_ol:
+        # check for no overlap
+        if (min_1 > img1.shape[d]) or (min_2 > img2.shape[d]):
             return None
 
-        r_min_1.append(floor(min_ol - off_1[d]))
-        r_min_2.append(floor(min_ol - off_2[d]))
-        r_max_1.append(ceil(max_ol - off_1[d]))
-        r_max_2.append(ceil(max_ol - off_2[d]))
+        max_1 = img1.shape[d] - (off_diff if off_1[d] >= off_2[d] else 0)
+        max_2 = img2.shape[d] - (off_diff if off_1[d] < off_2[d] else 0)
+
+        r_min_1.append(min_1)
+        r_min_2.append(min_2)
+        r_max_1.append(max_1)
+        r_max_2.append(max_2)
 
     return r_min_1, r_max_1, r_min_2, r_max_2
 
