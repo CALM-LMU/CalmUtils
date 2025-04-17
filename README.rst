@@ -1,4 +1,0 @@
-CalmUtils
-====
-
-A collection of commonly used Python code at the Center for Advanced Light Micsroscopy at LMU Munich
