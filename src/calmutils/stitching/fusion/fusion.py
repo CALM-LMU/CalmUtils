@@ -6,6 +6,7 @@ from ..phase_correlation import get_axes_aligned_bbox
 from scipy.interpolate import RegularGridInterpolator
 
 import numpy as np
+from tqdm import tqdm
 
 def subsample_image(image, ds_factor=2):
     image_ds = reduce(lambda arr, i : np.take(arr, np.arange(0, arr.shape[i], ds_factor), axis=i),
@@ -42,7 +43,7 @@ def _get_default_bbox_for_fusion(images, transformations):
     return bbox
 
 
-def fuse_image_blockwise(images, transformations, bbox=None, weights=None, oob_val=0, block_size=None, dtype=None, interpolation_mode='nearest'):
+def fuse_image_blockwise(images, transformations, bbox=None, weights=None, oob_val=0, block_size=None, dtype=None, interpolation_mode='nearest', progress_bar=True):
 
     # default bounding box around all transformed images
     if bbox is None:
@@ -64,7 +65,8 @@ def fuse_image_blockwise(images, transformations, bbox=None, weights=None, oob_v
     futures = [tpe.submit(fuse_image, images, transformations, bbox_, weights, oob_val, dtype, interpolation_mode) for bbox_ in p]
 
     # paste to result, take global offset into account
-    for f, bbox_ in zip(futures, p):
+    iteration_seq = tqdm(zip(futures, p), total=len(futures)) if progress_bar else zip(futures, p)
+    for f, bbox_ in iteration_seq:
         res[tuple((slice(mi_-mig_, ma_-mig_) for (mi_, ma_), (mig_, mag_) in zip(bbox_, bbox)))] = f.result()
 
     tpe.shutdown()
