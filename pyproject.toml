@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "CalmUtils"
-version = "0.1.2"
+version = "0.1.3-dev"
 description = "Commonly used Python code at the Center for Advanced Light Microscopy"
 readme = "README.md"
 authors = [

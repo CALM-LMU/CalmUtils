@@ -1,4 +1,5 @@
 from itertools import combinations
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
@@ -136,20 +137,42 @@ def fuse(imgs, offs, fun=np.max, cval=-1):
     return res, mi
 
 
-def stitch(images, positions=None, corr_thresh=0.7, subpixel=False, return_shift_vectors=False, reference_idx=0):
+def stitch(images, positions=None, corr_thresh=0.7, subpixel=False, return_shift_vectors=False, reference_idx=0, multi_threaded=True):
 
     # when no positions are given, assume all images at origin (will check all possible pairs)
     if positions is None:
         positions = [np.zeros(images[0].ndim)] * len(images)
 
     # pairwise transform estimation
-    global_registration_input = {}
+    phasecorr_results = []
+    
+    # thread pool and futures list if multi threaded
+    # TODO: allow setting number of threads?
+    tpe = ThreadPoolExecutor() if multi_threaded else None
+    futures = [] if multi_threaded else None
+
     for idx1, idx2 in combinations(range(len(images)), 2):
 
         img1, img2 = images[idx1], images[idx2]
         position1, position2 = positions[idx1], positions[idx2]
-        shift, corr = phasecorr_align_overlapping_region(img1, img2, position1, position2, subpixel=subpixel,
-                                                         return_relative_shift=True)
+
+        # calculate and append to results immediately
+        if not multi_threaded:
+            shift, corr = phasecorr_align_overlapping_region(img1, img2, position1, position2, subpixel=subpixel,
+                                                            return_relative_shift=True)
+            phasecorr_results.append((shift, corr))
+        # start in thread pool
+        else:
+            futures.append(tpe.submit(phasecorr_align_overlapping_region, img1, img2, position1, position2, subpixel, True))
+
+    # collect results if MT
+    if multi_threaded:
+        for f in futures:
+            phasecorr_results.append(f.result())
+
+    global_registration_input = {}
+    for (idx1, idx2), (shift, corr) in zip(combinations(range(len(images)), 2), phasecorr_results):
+        img1, img2 = images[idx1], images[idx2]
 
         # we have a shift with good enough correlation
         if corr is not None and corr > corr_thresh:
