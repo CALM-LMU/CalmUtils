@@ -73,6 +73,13 @@ def fuse_image_blockwise(images, transformations, bbox=None, weights=None, oob_v
     return res
 
 
+def _dummy_constant_array(shape, fill_value=0, dtype=None):
+    """
+    create a dummy constant array of given shape from a single value with 0 stride(s)
+    """
+    return np.lib.stride_tricks.as_strided(np.full(1, fill_value, dtype=dtype), shape=shape, strides=(0,)*len(shape))
+
+
 def fuse_image(images, transformations, bbox=None, weights=None, oob_val=0, dtype=None, interpolation_mode='nearest'):
 
     # default bounding box around all transformed images
@@ -90,7 +97,7 @@ def fuse_image(images, transformations, bbox=None, weights=None, oob_val=0, dtyp
 
     # unit weight if none given, make sure we have a list of weights
     if weights is None:
-        weights = [np.ones(img_i.shape) for img_i in images]
+        weights = [_dummy_constant_array(img_i.shape, 1.0) for img_i in images]
     if not isinstance(weights, list):
         weights = [weights]
 
