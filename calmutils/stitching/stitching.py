@@ -1,5 +1,6 @@
 from itertools import combinations
 from concurrent.futures import ThreadPoolExecutor
+import multiprocessing
 
 import numpy as np
 
@@ -137,7 +138,7 @@ def fuse(imgs, offs, fun=np.max, cval=-1):
     return res, mi
 
 
-def stitch(images, positions=None, corr_thresh=0.7, subpixel=False, return_shift_vectors=False, reference_idx=0, multi_threaded=True):
+def stitch(images, positions=None, corr_thresh=0.7, subpixel=False, return_shift_vectors=False, reference_idx=0, num_threads=0):
 
     # when no positions are given, assume all images at origin (will check all possible pairs)
     if positions is None:
@@ -145,10 +146,16 @@ def stitch(images, positions=None, corr_thresh=0.7, subpixel=False, return_shift
 
     # pairwise transform estimation
     phasecorr_results = []
-    
+
+    # do muti-threaded unless num_threads is set to 1
+    multi_threaded = num_threads != 1
+
+    # zero or negative thread count -> use number of CPU cores
+    if num_threads < 1:
+        num_threads = multiprocessing.cpu_count()
+
     # thread pool and futures list if multi threaded
-    # TODO: allow setting number of threads?
-    tpe = ThreadPoolExecutor() if multi_threaded else None
+    tpe = ThreadPoolExecutor(num_threads) if multi_threaded else None
     futures = [] if multi_threaded else None
 
     for idx1, idx2 in combinations(range(len(images)), 2):
