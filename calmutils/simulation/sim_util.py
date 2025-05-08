@@ -1,5 +1,5 @@
 import numpy as np
-from numpy.random import normal
+
 
 def runit_vec(n=1, d=3):
     '''
@@ -13,10 +13,10 @@ def runit_vec(n=1, d=3):
     if np.isscalar(n):
         n = [n]
 
-    vec = normal(size=tuple(list(n) + [d]))
+    vec = np.random.normal(size=(np.prod(n), d))
 
-    vec = np.apply_along_axis(lambda x: x / np.sqrt(np.sum(x**2)), len(n), vec)
-    return vec
+    vec = (vec.T / np.linalg.norm(vec, axis=1)).T
+    return vec.reshape(tuple(list(n) + [d]))
 
 if __name__ == '__main__':
     print((runit_vec((2, 2), 1).transpose() * np.array([[[1, 0], [0, 1]]])).transpose())
