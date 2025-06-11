@@ -2,11 +2,12 @@ from functools import reduce
 from itertools import tee, product
 from concurrent.futures import ThreadPoolExecutor
 
-from ..phase_correlation import get_axes_aligned_bbox
 from scipy.interpolate import RegularGridInterpolator
-
 import numpy as np
 from tqdm import tqdm
+
+from ..phase_correlation import get_axes_aligned_bbox
+from .fadeout import get_sinusoidal_fadeout
 
 def subsample_image(image, ds_factor=2):
     image_ds = reduce(lambda arr, i : np.take(arr, np.arange(0, arr.shape[i], ds_factor), axis=i),
@@ -56,6 +57,13 @@ def fuse_image_blockwise(images, transformations, bbox=None, weights=None, oob_v
     # allocate final array
     res = np.zeros(tuple((ma_ - mi_ for mi_, ma_ in bbox)), dtype=dtype if dtype is not None else images[0].dtype)
 
+    # constant weights with fadeout if none given, make sure we have a list of weights
+    # NOTE: we allocate here to prevent re-allocation in all worker threads
+    if weights is None:
+        weights = [get_sinusoidal_fadeout(img_i.shape) for img_i in images]
+    if not isinstance(weights, list):
+        weights = [weights]
+
     # list of sub-bboxes
     p = product(*[pairwise(range_includelast(_mi, _ma, s)) for (_mi, _ma), s in zip(bbox, block_size)])
     p = list(p)
@@ -95,9 +103,9 @@ def fuse_image(images, transformations, bbox=None, weights=None, oob_val=0, dtyp
     if not isinstance(images, list):
         images = [images]
 
-    # unit weight if none given, make sure we have a list of weights
+    # constant weights with fadeout if none given, make sure we have a list of weights
     if weights is None:
-        weights = [_dummy_constant_array(img_i.shape, 1.0) for img_i in images]
+        weights = [get_sinusoidal_fadeout(img_i.shape) for img_i in images]
     if not isinstance(weights, list):
         weights = [weights]
 
