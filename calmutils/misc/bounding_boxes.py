@@ -120,3 +120,23 @@ def minmax_to_minlen_bboxes(mins, maxs):
 def minlen_to_minmax_bboxes(mins, lens):
     maxs = np.array(mins) + np.array(lens)
     return mins, maxs
+
+
+def rectangle_corners(lengths, start=None):
+
+    """
+    Get the 2**n corner coordinates of a n-dimensional (hyper) rectangle with given side lengths.
+    Starts at origin by default, but custom offset can be added.
+    """
+    
+    lengths = np.asarray(lengths)
+    
+    if start is None:
+        start = np.zeros_like(lengths)
+    else:
+        start = np.asarray(start)
+
+    corners = np.stack(np.meshgrid(*((0, l) for l in lengths), indexing='ij'), -1).reshape(
+                -1, len(lengths))
+    
+    return corners + start

@@ -4,7 +4,7 @@ import multiprocessing
 
 import numpy as np
 
-from calmutils.misc.bounding_boxes import get_image_overlaps
+from calmutils.misc.bounding_boxes import get_image_overlaps, rectangle_corners
 from calmutils.stitching.phase_correlation import phasecorr_align
 from calmutils.stitching.transform_helpers import translation_matrix
 from calmutils.stitching.registration import register_translations
@@ -185,8 +185,7 @@ def stitch(images, positions=None, corr_thresh=0.7, subpixel=False, return_shift
         if corr is not None and corr > corr_thresh:
             # make dummy "point matches" from image corners for global registration
             # it does not really matter which points we use as long as they don't lie along the same axis
-            corners = np.stack(np.meshgrid(*((0, s) for s in img1.shape), indexing='ij'), -1).reshape(
-                -1, img1.ndim).astype(float)
+            corners = rectangle_corners(img1.shape).astype(float)
 
             # shift "matched points" in img2
             corners_shifted = corners - shift

@@ -1,4 +1,8 @@
 import numpy as np
+from random import shuffle
+import networkx as nx
+from skimage.transform import AffineTransform
+
 
 # first try, 2d affine test
 
@@ -206,3 +210,90 @@ def aug_vec(v):
     a = np.ones((len(v)+1,))
     a[:len(v)] = v
     return a
+
+
+def register_iterative(matched_points, fixed_indices=(), transform_type=AffineTransform, max_iterations=200):
+
+    """
+    Iterative global optimization of point matches.
+    Following Saalfeld et al., Bioinformatics, 2010 (https://doi.org/10.1093/bioinformatics/btq219)
+    """
+
+    # get any set of matched coords to determine dimensionality
+    coords1, coords2 = next(iter(matched_points.values()))
+    ndim = coords1.shape[1]
+
+    # get all indices
+    all_indices = set(sum(matched_points.keys(), ()))
+
+    # list of non-fixed := free indices
+    free_indices = [idx for idx in all_indices if idx not in fixed_indices]
+
+    # init all transforms with identity
+    transforms = {idx: transform_type(dimensionality=ndim) for idx in all_indices}
+
+    # make graph of connected indices
+    G = nx.Graph()
+    G.add_edges_from(matched_points.keys())
+
+    # iterate connected components
+    for cc_nodes in nx.connected_components(G):
+        Gi = G.subgraph(cc_nodes)
+
+        # start for bfs: any fixed node or any node if none are fixed
+        bfs_start = next((n for n in Gi.nodes if n in fixed_indices), None) or next(iter(Gi.nodes))
+
+        for idx1, idx2 in nx.bfs_edges(Gi, bfs_start):
+
+            # we want to update idx2, if it is fixed, we skip it
+            if idx2 in fixed_indices:
+                continue
+
+            # handle two possible orders in matched point dict
+            if (idx1, idx2) in matched_points:
+                coords1, coords2 = matched_points[(idx1, idx2)]
+            else:
+                coords2, coords1 = matched_points[(idx2, idx1)]
+
+            # apply existing transform to idx1 (idx2 is still identity)
+            coords1 = transforms[idx1](coords1)
+
+            # estimate additional transform for idx2 and concatenate
+            tr = transform_type(dimensionality=ndim)
+            tr.estimate(coords2, coords1)
+            transforms[idx2] = transforms[idx2] + tr
+
+
+    # iteratively refine
+    for _ in range(max_iterations):
+
+        # shuffle indices
+        shuffle(free_indices)
+
+        for idx in free_indices:
+
+            # collect coordinates of idx and matched of others with current transforms applied
+            coords_self = []
+            coords_other = []
+
+            for (idx1, idx2), (coords1, coords2) in matched_points.items():
+                if idx1 == idx:
+                    coords_self.append(transforms[idx](coords1))
+                    coords_other.append(transforms[idx2](coords2))
+                elif idx2 == idx:
+                    coords_self.append(transforms[idx](coords2))
+                    coords_other.append(transforms[idx1](coords1))
+
+            coords_self = np.vstack(coords_self)
+            coords_other = np.vstack(coords_other)
+
+            # estimate new transform
+            tr = transform_type(dimensionality=ndim)
+            tr.estimate(coords_self, coords_other)
+
+            # append new transform to existing
+            transforms[idx] = transforms[idx] + tr
+
+            # TODO: early stop if converged
+
+    return transforms
