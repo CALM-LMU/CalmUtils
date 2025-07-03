@@ -1,4 +1,4 @@
-from itertools import combinations, product
+from itertools import combinations
 
 # do not make tqdm a hard dependency
 try:
@@ -8,8 +8,9 @@ except ImportError:
 
 import numpy as np
 from numpy.linalg import qr
-from scipy.spatial import kdtree
+from scipy.spatial import KDTree
 from skimage.transform import AffineTransform
+
 
 def descriptor_local_2d(points, n_neighbors=3, redundancy=0, scale_invariant=True, progress_bar=False):
 
@@ -26,7 +27,7 @@ def descriptor_local_2d(points, n_neighbors=3, redundancy=0, scale_invariant=Tru
     NOTE: only works for 2D at the moment
     """
 
-    kd = kdtree.KDTree(points)
+    kd = KDTree(points)
     descs = []
     idxes = []
 
@@ -56,7 +57,7 @@ def descriptor_local_2d(points, n_neighbors=3, redundancy=0, scale_invariant=Tru
     return np.array(descs), idxes
 
 
-def descriptor_local_qr(points, n_neighbors=3, redundancy=0, scale_invariant=True, progress_bar=False):
+def descriptor_local_qr(points, n_neighbors=3, redundancy=0, scale_invariant=True):
 
     """
     Generate geometric descriptors from a set of n-dimensional points.
@@ -67,42 +68,42 @@ def descriptor_local_qr(points, n_neighbors=3, redundancy=0, scale_invariant=Tru
     will be considered and multiple descriptors per point returned.
     """
 
-    kd = kdtree.KDTree(points)
-    descs = []
-    idxes = []
+    N, d = points.shape
 
-    # upper triangular indices
-    triag_idxes = list(map( lambda x : x[1] >= x[0], product(range(len(points[0])), range(n_neighbors))))
+    # mask of upper triangular elements -> to select from QR factorization results
+    triu_mask = np.triu(np.ones((d, n_neighbors))).astype(bool)
 
-    worklist = tqdm.tqdm(list(enumerate(list(points)))) if progress_bar else enumerate(list(points))
-    for i,p in worklist:
-        try:
+    # query nearest neighbors with kd-tree
+    kd = KDTree(points)
+    _, idxes = kd.query(points, n_neighbors + redundancy +1)
+    # discard neares neighbor (self)
+    idxes = idxes[:, 1:]
 
-            # query neighbors, get relative coords by subtracting first result (self)
-            _, ix = kd.query(p, n_neighbors+1+redundancy)
-            rel_coords = points[ix[1:]] - p
-            rel_coords = list(rel_coords)
+    # vectors to nearest neighbors
+    rel_coords = points[idxes.T.ravel()].reshape(n_neighbors + redundancy, N, d) - points
 
-            for c in combinations(rel_coords, n_neighbors):
+    # collect descriptors & indices for redundant combinations of neighbors
+    result_descriptors = []
+    result_indices = []
 
-                # QR decomposition, we are interested in R (i.e. coordinates of neighbors in local basis Q) 
-                a = np.stack(c, axis=1)
-                _, R = qr(a)
+    for rel_coords_i in combinations(rel_coords, n_neighbors):
 
-                # extract upper triangular part
-                desc = R.ravel()[triag_idxes]
+        # transpose to N, d, n_neighbors
+        qr_input = np.transpose(rel_coords_i, (1, 2, 0))
 
-                # to make scale_invariant we divide by the first entry (i.e. distance to nearest neighbor)
-                if scale_invariant:
-                    desc /= desc[0]
-                    desc = desc[1:]
+        # QR automatically loops over first dimension, with mode="r" we ignore Q
+        r = qr(qr_input, mode="r")
 
-                descs.append(desc)
-                idxes.append(i)
+        # descriptor: upper triangular elements of R
+        desc = r[:, triu_mask]
 
-        except RuntimeWarning:
-            pass
-        except IndexError:
-            raise
+        if scale_invariant:
+            # divide by length of first vector (first element of descriptor)
+            desc = (desc.T / desc.T[0]).T
+            # discard as it is always 1
+            desc = desc[:, 1:]
 
-    return np.array(descs), np.array(idxes)
+        result_descriptors.append(desc)
+        result_indices.append(np.arange(N, dtype=int))
+
+    return np.vstack(result_descriptors), np.concat(result_indices)
