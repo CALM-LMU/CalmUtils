@@ -20,7 +20,7 @@ def get_sinusoidal_fadeout_profile_1d(size, fadeout_width=10):
     ramp = np.sin(np.linspace(0, np.pi/2, fadeout_width+2))[1:-1]
 
     # concat ramps with constant center
-    profile = np.concat([ramp, np.ones(size - 2 * fadeout_width), ramp[::-1]])
+    profile = np.concatenate([ramp, np.ones(size - 2 * fadeout_width), ramp[::-1]])
 
     return profile
 
