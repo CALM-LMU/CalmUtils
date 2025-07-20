@@ -46,6 +46,12 @@ def _get_default_bbox_for_fusion(images, transformations):
 
 def fuse_image_blockwise(images, transformations, bbox=None, weights=None, oob_val=0, block_size=None, dtype=None, interpolation_mode='nearest', progress_bar=True):
 
+    # ensure we have a list of imgs, transforms even if just one given
+    if not isinstance(transformations, list):
+        transformations = [transformations]
+    if not isinstance(images, list):
+        images = [images]
+
     # default bounding box around all transformed images
     if bbox is None:
         bbox = _get_default_bbox_for_fusion(images, transformations)
@@ -90,18 +96,18 @@ def _dummy_constant_array(shape, fill_value=0, dtype=None):
 
 def fuse_image(images, transformations, bbox=None, weights=None, oob_val=0, dtype=None, interpolation_mode='nearest'):
 
+    # ensure we have a list of imgs, transforms even if just one given
+    if not isinstance(transformations, list):
+        transformations = [transformations]
+    if not isinstance(images, list):
+        images = [images]
+
     # default bounding box around all transformed images
     if bbox is None:
         bbox = _get_default_bbox_for_fusion(images, transformations)
 
     # shape of output
     out_shape = tuple(ma - mi for mi, ma in bbox)
-
-    # ensure we have a list of imgs, transforms even if just one given
-    if not isinstance(transformations, list):
-        transformations = [transformations]
-    if not isinstance(images, list):
-        images = [images]
 
     # constant weights with fadeout if none given, make sure we have a list of weights
     if weights is None:
