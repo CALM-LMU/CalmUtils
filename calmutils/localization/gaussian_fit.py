@@ -70,6 +70,110 @@ def gaussian_3d(x, min_, max_, mu0, mu1, mu2, sig0, sig1, sig2):
     res = min_ + max_ * np.exp(-1.0/2.0 * (((x[:,0] - mu0) / sig0)**2 + ((x[:,1] - mu1) / sig1)**2 + ((x[:,2] - mu2) / sig2)**2))
     return res
 
+"""
+Jacobians of 1d, 2d, 3d Gaussian to use in curve_fit
+"""
+
+@njit
+def jac_gaussian_1d(x, min_, max_, mu0, sig0):
+
+    """
+    Jacobian of 1D Gaussian function.
+    (derived via SymPy)
+    """
+
+    # values of exponential part of Gaussian, part of most derivatives
+    exp_values = gaussian_1d(x, min_, max_, mu0, sig0) / max_ - min_
+
+    jac = (
+        np.ones_like(exp_values),
+        exp_values,
+        max_ * (mu0 - x.T[0]) / sig0**2 * exp_values,
+        max_ * (x.T[0] - mu0)**2 / sig0 **3 * exp_values,
+    )
+
+    return np.stack(jac, axis=-1)
+
+@njit
+def jac_gaussian_2d(x, min_, max_, mu0, mu1, sig0, sig1):
+
+    """
+    Jacobian of 2D Gaussian function.
+    (derived via SymPy)
+    """
+
+    # values of exponential part of Gaussian, part of most derivatives
+    exp_values = gaussian_2d(x, min_, max_, mu0, mu1, sig0, sig1) / max_ - min_
+
+    jac = (
+        np.ones_like(exp_values),
+        exp_values,
+        max_ * (mu0 - x.T[0]) / sig0**2 * exp_values,
+        max_ * (mu1 - x.T[1]) / sig1**2 * exp_values,
+        max_ * (x.T[0] - mu0)**2 / sig0 **3 * exp_values,
+        max_ * (x.T[1] - mu1)**2 / sig1 **3 * exp_values
+    )
+
+    return np.stack(jac, axis=-1)
+
+@njit
+def jac_gaussian_3d(x, min_, max_, mu0, mu1, mu2, sig0, sig1, sig2):
+
+    """
+    Jacobian of 3D Gaussian function.
+    (derived via SymPy)
+    """
+
+    # values of exponential part of Gaussian, part of most derivatives
+    exp_values = gaussian_3d(x, min_, max_, mu0, mu1, mu2, sig0, sig1, sig2) / max_ - min_
+
+    jac = (
+        np.ones_like(exp_values),
+        exp_values,
+        max_ * (mu0 - x.T[0]) / sig0**2 * exp_values,
+        max_ * (mu1 - x.T[1]) / sig1**2 * exp_values,
+        max_ * (mu2 - x.T[2]) / sig2**2 * exp_values,
+        max_ * (x.T[0] - mu0)**2 / sig0 **3 * exp_values,
+        max_ * (x.T[1] - mu1)**2 / sig1 **3 * exp_values,
+        max_ * (x.T[2] - mu2)**2 / sig2 **3 * exp_values
+    )
+
+    return np.stack(jac, axis=-1)
+
+
+def gaussian_fit_single(mask, img):
+
+    # get appropriate function and Jacobian for dimensionality
+    if img.ndim == 1:
+        fun = gaussian_1d
+        jac = jac_gaussian_1d
+    elif img.ndim == 2:
+        fun = gaussian_2d
+        jac = jac_gaussian_2d
+    elif img.ndim == 3:
+        fun = gaussian_3d
+        jac = jac_gaussian_3d
+    else:
+        fun = gaussian_nd
+        jac = None
+
+    # coords and values in mask
+    coords = np.argwhere(mask)
+    values = img[mask]
+
+    # initial guess (multiply with mask to zero values outside of mask)
+    p0 = initial_guess_gaussian2(img * mask)
+
+    try:
+        popt, *fit_infos = curve_fit(fun, coords, values, p0, jac=jac)
+    # catch errors that may be raised by curve_fit + TypeError when used as extra property in skimage regionprops
+    # NOTE: errors in regionprops happen during first pass to determine dtype, etc. but do not seem to affect results
+    except (OptimizeWarning, RuntimeError, ValueError, TypeError) as e:
+        popt = np.full(2 + 2 * img.ndim, np.nan)
+
+    return popt
+
+
 def refine_point_lsq(img, guess, cutregion=None, fun=None, maxmove=5):
     '''
     refine localization in img by least-squares Gaussian (cov=0) fit
