@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "CalmUtils"
-version = "0.1.5-dev"
+version = "0.1.5"
 description = "Commonly used Python code at the Center for Advanced Light Microscopy"
 readme = "README.md"
 authors = [
@@ -18,6 +18,7 @@ dependencies = [
     "scikit-image",
     "scipy",
     "tqdm",
+    "fastremap",
 ]
 
 [project.urls]
