@@ -2,7 +2,7 @@ from functools import reduce
 from itertools import tee, product
 from concurrent.futures import ThreadPoolExecutor
 
-from scipy.interpolate import RegularGridInterpolator
+from scipy.ndimage import map_coordinates
 import numpy as np
 from tqdm import tqdm
 
@@ -135,26 +135,42 @@ def fuse_image(images, transformations, bbox=None, weights=None, oob_val=0, dtyp
         # slices into output array
         slices = tuple(slice(mi-gm,ma-gm) for mi,ma,gm in zip(mins_i, maxs_i, [mi for mi, _ in bbox]))
 
+        # interpolation mode (RegularGridInterpolator) -> order (map_coordinates) mapping
+        interp_map = {
+            'nearest': 0,
+            'linear': 1,
+            'slinear': 1,
+            'cubic': 3,
+        }
+
+        # map str interpolation_mode to int order if necessary
+        if not isinstance(interpolation_mode, int):
+            order = interp_map.get(interpolation_mode, 1)
+        else:
+            order = interpolation_mode
+
+        inv_mat = np.linalg.inv(mat)
+
         # transform coords of patch
         coords_i = np.meshgrid(*[np.arange(mi,ma) for mi,ma in zip(mins_i, maxs_i)], indexing='ij')
         # augment coords, apply transform, remove augmented again
         coords_i = np.stack(tuple(coords_i) + (np.ones(coords_i[0].shape, dtype=coords_i[0].dtype),), -1)
-        coords_i_tr = coords_i @ np.linalg.inv(mat).transpose()
-        coords_i_tr = np.take(coords_i_tr, range(img.ndim), -1)
-
-        # interpolator into image and weight arrays
-        img_interp = RegularGridInterpolator(tuple(np.arange(s) for s in img.shape), img, bounds_error=False, fill_value=oob_val, method=interpolation_mode)
-        weight_interp = RegularGridInterpolator(tuple(np.arange(s) for s in weight.shape), weight, bounds_error=False, fill_value=0, method=interpolation_mode)
+        coords_i_tr = coords_i @ inv_mat.transpose()
+        coords_i_tr = coords_i_tr[..., :-1]
+       
+        # Interpolate with map_coordinates
+        # NOTE: Transpose for map_coordinates: expects (ndim, points) input
+        vals = map_coordinates(img, coords_i_tr.T, order=order, mode='constant', cval=oob_val).reshape(coords_i.shape[:-1])
+        w = map_coordinates(weight, coords_i_tr.T, order=order, mode='constant', cval=0).reshape(coords_i.shape[:-1])
 
         # get values / weights, add to result arrays
-        vals = img_interp(coords_i_tr)
-        w = weight_interp(coords_i_tr)
         res[slices] += vals * w
         res_w[slices] += w
 
     # only divide by nonzero
-    res[res_w != 0] = res[res_w != 0] / res_w[res_w != 0]        
+    nonzero = res_w != 0
+    res[nonzero] = res[nonzero] / res_w[nonzero]        
     # set zero weight to oob_val
-    res[res_w == 0] = oob_val
+    res[~nonzero] = oob_val
 
     return res.astype(dtype if dtype is not None else images[0].dtype)
