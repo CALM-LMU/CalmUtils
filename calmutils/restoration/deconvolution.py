@@ -106,7 +106,7 @@ def rl_deconvolve(observed, kernel, *, num_iter=25, bandlimit=None, edge="period
         raise ValueError("observed has no positive signal")
 
     if edge == "reflect":
-        pad = tuple(k // 2 for k in ker.shape)
+        pad = tuple((k // 2, k // 2) for k in ker.shape)  # per-axis (before, after)
         work = np.pad(img, pad, mode="reflect")
     elif edge == "periodic":
         pad = None
@@ -138,5 +138,5 @@ def rl_deconvolve(observed, kernel, *, num_iter=25, bandlimit=None, edge="period
             u = np.maximum(np.fft.ifftn(np.fft.fftn(u) * mask).real, 0.0)
 
     if pad is not None:
-        u = u[tuple(slice(p, p + n) for p, n in zip(pad, img.shape))]
+        u = u[tuple(slice(p0, p0 + n) for (p0, _), n in zip(pad, img.shape))]
     return u

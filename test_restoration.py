@@ -140,6 +140,17 @@ def main():
     ok &= abs(pk_r[0]) <= 1 and abs(pk_r[1]) <= 1
     ok &= ghost_p > ghost_r and 0.8 < rec_r.sum() / obs_b.sum() < 1.05
 
+    # edge="reflect" in 3D with a non-cubic kernel (pad needs per-axis pairs)
+    img3 = np.zeros((24, 30, 30))
+    img3[2, 3, 3] = 100.0
+    k3 = _gaussian_volume((5, 9, 9), (1.0, 2.0, 2.0)); k3 /= k3.sum()
+    obs3 = _convolve_same(np.pad(img3, 40, mode="constant"), k3)[40:-40, 40:-40, 40:-40]
+    rec3 = rl_deconvolve(obs3, k3, num_iter=40, edge="reflect")
+    pk3 = np.unravel_index(np.argmax(rec3), rec3.shape)
+    print(f"[rl] 3D reflect with non-cubic kernel: peak {pk3} (true (2,3,3)), "
+          f"shape {rec3.shape} == input {obs3.shape}")
+    ok &= rec3.shape == obs3.shape and abs(pk3[0] - 2) <= 1 and abs(pk3[1] - 3) <= 1
+
     # sub-voxel bead kernel -> deconvolution is a no-op
     g2 = _gaussian_volume((21, 25), (2.0, 3.0))
     noop = rl_deconvolve(g2, bead_kernel((50.0, 50.0), 10.0), num_iter=10)
