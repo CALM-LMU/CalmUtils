@@ -47,3 +47,51 @@ def hypersphere_centered(rank, radius, dtype=np.uint8):
     L = np.arange(-radius_ceil, radius_ceil + 1)
     dist = np.linalg.norm(np.stack(np.meshgrid(*[L]*rank, indexing='ij')), axis=0)
     return (dist<=radius).astype(dtype)
+
+def bead_kernel(psz, bead_diameter, *, supersample=4):
+    """
+    Supersampled (anti-aliased) solid-sphere kernel, unit sum.
+
+    Models a uniformly stained solid sphere of ``bead_diameter`` (same length
+    unit as ``psz``) sampled on the voxel grid. Supersampling gives fractional
+    edge voxels (correct volumes, no hard binary edge), which keeps the
+    Fourier-domain conditioning much better than a binary mask - useful as a
+    deconvolution kernel for PSF distillation.
+
+    ``psz`` : one value per axis (e.g. ``(z, y, x)`` voxel size in nm). The
+    kernel is an ellipsoid in voxel space (sphere in physical space) and has
+    odd size ``2*ceil(radius_px) + 1`` per axis.
+
+    Note: if the bead is smaller than a voxel, the kernel degenerates to a
+    delta on the center voxel (a deconvolution with it is a no-op, as it
+    should be).
+    """
+    psz = np.atleast_1d(np.asarray(psz, dtype=float))
+    r = bead_diameter / 2.0 / psz
+    if np.any(r <= 0):
+        raise ValueError("bead_diameter must be positive")
+
+    n = 2 * np.ceil(r).astype(int) + 1
+    grids = np.meshgrid(
+        *[(np.arange(int(s * supersample)) - (s * supersample - 1) / 2.0) / supersample
+          for s in n],
+        indexing="ij",
+    )
+    q = np.zeros(grids[0].shape)
+    for g, rr in zip(grids, r):
+        q += (g / rr) ** 2
+    k_ss = (q <= 1.0).astype(float)
+
+    # block-reduce the supersampled grid (mean over each supersample axis)
+    newshape = [d for s in n for d in (int(s), int(supersample))]
+    k = k_ss.reshape(newshape)
+    k = k.mean(axis=tuple(range(1, 2 * k_ss.ndim, 2)))
+
+    s = k.sum()
+    if s <= 0:
+        # bead smaller than one supersample cell: the unit-sum limit is a
+        # delta on the center voxel
+        k = np.zeros(tuple(int(x) for x in n))
+        k[tuple(int(x) // 2 for x in n)] = 1.0
+        return k
+    return k / s
