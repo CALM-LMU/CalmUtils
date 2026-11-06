@@ -26,7 +26,8 @@ from calmutils.restoration import (
 )
 from calmutils.restoration.deconvolution import _convolve_same
 from calmutils.morphology import bead_kernel
-from calmutils.localization.util import nearest_neighbor_distances
+from calmutils.localization.util import (nearest_neighbor_distances,
+                                         kernel_weights, effective_sample_size)
 
 
 def _gaussian_volume(shape, sigma):
@@ -235,6 +236,53 @@ def main():
     m4 = psf_metrics(g4)
     print(f"[psf_metrics] sidelobe ratio with 0.25 side peaks at +-7 px: {m4['sidelobe_ratio']:.3f}")
     ok &= 0.15 < m4["sidelobe_ratio"] < 0.4
+
+    # ---------------- asymmetry metrics ----------------
+    # asymmetric profile: Gaussian + tail to the right -> asymmetry > 0, skew > 0
+    prof_a = np.exp(-0.5 * ((xs - 20) / 2.5) ** 2) \
+        + 0.4 * np.exp(-0.5 * ((xs - 26) / 3.0) ** 2)
+    pma = profile_metrics(prof_a)
+    print(f"[asym] profile asymmetry {pma['asymmetry']:.3f} (expect > 0), "
+          f"hw_left {pma['hw_left']:.2f} hw_right {pma['hw_right']:.2f}, "
+          f"skew {pma['skew']:.3f} (expect > 0)")
+    ok &= pma["asymmetry"] > 0.1 and pma["skew"] > 0.1
+    ok &= abs(pma["hw_left"] + pma["hw_right"] - pma["fwhm"]) < 1e-9
+    # symmetric Gaussian -> asymmetry ~ 0
+    pms = profile_metrics(np.exp(-0.5 * ((xs - 20) / 2.5) ** 2))
+    ok &= abs(pms["asymmetry"]) < 0.05 and abs(pms["skew"]) < 0.1
+
+    # astigmatism: fwhm_x != fwhm_y
+    g_ast = _gaussian_volume((21, 21, 31), (2.0, 2.0, 3.0))
+    g_ast /= g_ast.sum()
+    m_ast = psf_metrics(g_ast, psz=(100.0, 50.0, 50.0))
+    exp_ast = (3.0 - 2.0) / 2.5  # (fwhm_x - fwhm_y) / mean, sigmas 2 vs 3
+    print(f"[asym] astigmatism {m_ast['astigmatism']:.3f} vs expected ~{exp_ast:.3f}; "
+          f"ring_radius_phys {np.round(m_ast['ring_radius_phys'], 1)} nm (no ring -> nan)")
+    ok &= abs(m_ast["astigmatism"] - exp_ast) < 0.05
+    ok &= np.all(np.isnan(m_ast["ring_radius_px"]))
+
+    # donut: ring radius ~ +-7 px, symmetric sidelobes
+    m4b = psf_metrics(g4, psz=(50.0, 50.0, 50.0))
+    print(f"[asym] donut: sidelobe L/R {m4b['sidelobe_left']:.3f}/{m4b['sidelobe_right']:.3f}, "
+          f"asym {m4b['sidelobe_asym']:.3f}, ring_radius_px {np.round(m4b['ring_radius_px'], 1)}")
+    ok &= 5 < m4b["ring_radius_px"][2] < 9
+    ok &= abs(m4b["sidelobe_asym"]) < 0.2
+    ok &= abs(m4b["sidelobe_left"] - m4b["sidelobe_right"]) < 0.05
+
+    # ---------------- kernel weights / ESS ----------------
+    pts_k = np.array([[0., 0.], [3., 0.], [0., 4.], [30., 30.]])
+    w = kernel_weights(pts_k, [0., 0.], bandwidth=5.0)
+    print(f"[kernel] weights {np.round(w, 3)} (center 1, decreasing)")
+    ok &= w[0] == 1.0 and w[1] > w[2] > w[3] and w[3] < 1e-8
+    w_phys = kernel_weights(pts_k, [0., 0.], bandwidth=10.0, psz=(2.0, 1.0))
+    # physical distance of p1 = 6 > bandwidth -> smaller weight than p2 (dist 4)
+    ok &= w_phys[2] > w_phys[1]
+    w_ep = kernel_weights(pts_k, [0., 0.], bandwidth=5.0, kind="epanechnikov")
+    ok &= w_ep[3] == 0.0 and np.all(w_ep >= 0)
+    ess_uni = effective_sample_size(np.ones(10))
+    ess_peak = effective_sample_size(np.array([1.0] + [1e-6] * 9))
+    print(f"[kernel] ESS uniform {ess_uni:.1f} (expect 10), peaked {ess_peak:.2f} (expect ~1)")
+    ok &= abs(ess_uni - 10) < 1e-9 and abs(ess_peak - 1) < 1e-3
 
     # ---------------- encircled energy ----------------
     g_iso = _gaussian_volume((41, 41, 41), (2.0, 2.0, 2.0))
