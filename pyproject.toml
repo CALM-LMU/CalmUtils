@@ -21,6 +21,10 @@ dependencies = [
     "fastremap",
 ]
 
+[project.optional-dependencies]
+torch = ["torch"]
+ml = ["torch", "lightning"]
+
 [project.urls]
 "Homepage" = "https://github.com/CALM-LMU/CalmUtils"
 "Bug Tracker" = "https://github.com/CALM-LMU/CalmUtils/issues"
