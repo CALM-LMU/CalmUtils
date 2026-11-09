@@ -7,12 +7,14 @@ fields with defaults and old configs keep working.
 """
 
 import math
+import re
 import warnings
 from dataclasses import dataclass, asdict
 
 import torch.nn as nn
 
-__all__ = ["ConvBlockConfig", "ConvBlock", "check_dimensionality", "make_activation", "make_norm"]
+__all__ = ["ConvBlockConfig", "ConvBlock", "check_dimensionality", "make_activation", "make_norm",
+           "remap_legacy_state_dict", "maybe_remap_legacy_state_dict"]
 
 _CONV_CLASSES = {1: nn.Conv1d, 2: nn.Conv2d, 3: nn.Conv3d}
 _BATCHNORM_CLASSES = {1: nn.BatchNorm1d, 2: nn.BatchNorm2d, 3: nn.BatchNorm3d}
@@ -146,6 +148,24 @@ class ConvBlock(nn.Module):
                 skip_layers.append(skip_norm)
             self.skip = nn.Sequential(*skip_layers)
 
+    def load_state_dict(self, state_dict, strict=True):
+        # accept checkpoints saved with a legacy ConvBlock layout
+        return super().load_state_dict(maybe_remap_legacy_state_dict(state_dict), strict=strict)
+
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict,
+                              missing_keys, unexpected_keys, error_msgs):
+        # Remap legacy keys IN PLACE: torch's load_state_dict recurses into submodules with
+        # dicts filtered from this one, so a remapped copy would not reach deeper layers.
+        # (Nested frames receive freshly filtered copies, so in-place mutation is safe here.)
+        legacy = {k: v for k, v in state_dict.items() if k.startswith(prefix) and _is_legacy_key(k)}
+        if legacy:
+            remapped = remap_legacy_state_dict(legacy, context=state_dict)
+            for k in legacy:
+                del state_dict[k]
+            state_dict.update(remapped)
+        super()._load_from_state_dict(state_dict, prefix, local_metadata, strict,
+                                      missing_keys, unexpected_keys, error_msgs)
+
     def forward(self, x):
         x1 = self.first(x)
         out = self.rest(x1)
@@ -154,3 +174,69 @@ class ConvBlock(nn.Module):
         elif self.config.residual == "input":
             out = out + self.skip(x)
         return out
+
+
+# ---------------------------------------------------------------------------
+# Legacy state-dict remapping (ConvBlock layout history)
+# ---------------------------------------------------------------------------
+
+_LEGACY_FLAT_REST = re.compile(r"\.rest\.\d+\.(weight|bias|running_mean|running_var|num_batches_tracked)$")
+
+
+def _is_legacy_key(key):
+    return ".steps." in key or bool(_LEGACY_FLAT_REST.search(key))
+
+
+def maybe_remap_legacy_state_dict(state_dict, prefix=""):
+    """Return a copy of state_dict with legacy ConvBlock keys remapped (only keys under prefix)."""
+    legacy = {k: v for k, v in state_dict.items() if k.startswith(prefix) and _is_legacy_key(k)}
+    if not legacy:
+        return state_dict
+    remapped = remap_legacy_state_dict(legacy, context=state_dict)
+    return {k: v for k, v in state_dict.items() if not (k.startswith(prefix) and _is_legacy_key(k))} | remapped
+
+
+def remap_legacy_state_dict(state_dict, context=None):
+    """
+    Remap a state dict from a legacy ConvBlock layout to the current one.
+
+    Legacy layouts handled:
+    - schema_version 1: a single flat 'steps' Sequential of sublayers
+      (conv, [batch norm], activation, ...) per block.
+    - intermediate (uncommitted refactor): 'first' sublayer + flat 'rest' Sequential.
+
+    The current layout uses 'first' (one sublayer) and 'rest' (a Sequential of
+    sublayers, each itself a Sequential), so flat indices beyond the first sublayer
+    are decomposed into (sublayer index, position within sublayer).
+    """
+    flat_rest = re.compile(r"^(.*\.rest)\.(\d+)\.(weight|bias|running_mean|running_var|num_batches_tracked)$")
+    context = state_dict if context is None else context  # probe source; may be larger than state_dict
+
+    def sublayer_len(prefix):
+        # batch norm adds a parameterized layer at position 1 of the first sublayer
+        for probe in (f"{prefix}.steps.1.weight", f"{prefix}.first.1.weight"):
+            if probe in context:
+                return 3
+        return 2
+
+    remapped = {}
+    for key, value in state_dict.items():
+        if ".steps." in key:
+            prefix, rest = key.rsplit(".steps.", 1)
+            idx_str, suffix = rest.split(".", 1)
+            idx = int(idx_str)
+            split = sublayer_len(prefix)
+            if idx < split:
+                remapped[f"{prefix}.first.{idx}.{suffix}"] = value
+            else:
+                s, p = divmod(idx - split, split)
+                remapped[f"{prefix}.rest.{s}.{p}.{suffix}"] = value
+        elif flat_rest.match(key):
+            m = flat_rest.match(key)
+            prefix, idx, suffix = m.group(1), int(m.group(2)), m.group(3)
+            block_prefix = prefix[:-len(".rest")]
+            s, p = divmod(idx, sublayer_len(block_prefix))
+            remapped[f"{prefix}.{s}.{p}.{suffix}"] = value
+        else:
+            remapped[key] = value
+    return remapped

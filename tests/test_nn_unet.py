@@ -48,6 +48,17 @@ def test_legacy_state_dict_loads_strictly_after_remap():
     new.load_state_dict(remapped, strict=True)  # must not raise
 
 
+def test_legacy_state_dict_loads_via_parent_module():
+    # simulates LightningModule.load_from_checkpoint, which bypasses child load_state_dict overrides
+    import torch.nn as nn
+    legacy, new = make_pair()
+    wrapper = nn.Sequential(new)  # parent module holding the UNet
+    wrapper.load_state_dict({"0." + k: v for k, v in legacy.state_dict().items()}, strict=True)
+    x = torch.randn(1, 3, 64, 64)
+    with torch.no_grad():
+        assert torch.allclose(legacy(x), new(x), atol=1e-6)
+
+
 def test_dims_and_odd_sizes():
     cfg = UNetConfig(in_channels=2, out_channels=3, intermediate_channels=[8, 16, 32], dimensionality=2,
                      block=ConvBlockConfig(n_convs=2, residual=True, norm="batch"))

@@ -16,15 +16,18 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .blocks import ConvBlock, ConvBlockConfig, check_dimensionality, conv_classes, conv_transpose_classes
+from .blocks import (ConvBlock, ConvBlockConfig, check_dimensionality, conv_classes, conv_transpose_classes,
+                     remap_legacy_state_dict, maybe_remap_legacy_state_dict, _is_legacy_key)
 
 __all__ = [
     "UNetConfig",
     "UNet",
+    "UNet2D",
     "save_checkpoint",
     "load_unet_checkpoint",
     "load_state_dict_flexible",
     "remap_legacy_state_dict",
+    "maybe_remap_legacy_state_dict",
 ]
 
 
@@ -142,6 +145,11 @@ class UNet(nn.Module):
         # final 1x1 convolution to get output channel number
         self.out_conv = conv_class(intermediate[0], config.out_channels, 1, padding_mode=block.padding_mode)
 
+    def load_state_dict(self, state_dict, strict=True):
+        # accept checkpoints saved with a legacy ConvBlock layout (ConvBlock's own hook
+        # covers the case where this UNet is nested inside a larger module)
+        return super().load_state_dict(maybe_remap_legacy_state_dict(state_dict), strict=strict)
+
     def forward(self, x):
         # apply encoder conv blocks, keep intermediate outputs for skip connections
         encoder_intermediates = []
@@ -163,6 +171,14 @@ class UNet(nn.Module):
             x = dec(x)
 
         return self.out_conv(x)
+
+
+def UNet2D(in_channels, intermediate_channels, out_channels, dimensionality=2,
+            residual_conv_blocks=False, n_convs_per_block=3, batch_norm=False):
+    """Legacy convenience signature (positional dimensionality / residual_conv_blocks / n_convs_per_block)."""
+    return UNet(in_channels, intermediate_channels, out_channels, dimensionality=dimensionality,
+                residual_conv_blocks=residual_conv_blocks, n_convs_per_block=n_convs_per_block,
+                batch_norm=batch_norm)
 
 
 def _match_spatial_size(x, target_shape):
@@ -187,52 +203,8 @@ def _match_spatial_size(x, target_shape):
 
 # ---------------------------------------------------------------------------
 # Checkpoint / state-dict compatibility helpers
+# (remap_legacy_state_dict / maybe_remap_legacy_state_dict live in .blocks)
 # ---------------------------------------------------------------------------
-
-def remap_legacy_state_dict(state_dict):
-    """
-    Remap a state dict from a legacy ConvBlock layout to the current one.
-
-    Legacy layouts handled:
-    - schema_version 1: a single flat 'steps' Sequential of sublayers
-      (conv, [batch norm], activation, ...) per block.
-    - intermediate (uncommitted refactor): 'first' sublayer + flat 'rest' Sequential.
-
-    The current layout uses 'first' (one sublayer) and 'rest' (a Sequential of
-    sublayers, each itself a Sequential), so flat indices beyond the first sublayer
-    are decomposed into (sublayer index, position within sublayer).
-    """
-    flat_rest = re.compile(r"^(.*\.rest)\.(\d+)\.(weight|bias|running_mean|running_var|num_batches_tracked)$")
-
-    def sublayer_len(prefix):
-        # batch norm adds a parameterized layer at position 1 of the first sublayer
-        for probe in (f"{prefix}.steps.1.weight", f"{prefix}.first.1.weight"):
-            if probe in state_dict:
-                return 3
-        return 2
-
-    remapped = {}
-    for key, value in state_dict.items():
-        if ".steps." in key:
-            prefix, rest = key.rsplit(".steps.", 1)
-            idx_str, suffix = rest.split(".", 1)
-            idx = int(idx_str)
-            split = sublayer_len(prefix)
-            if idx < split:
-                remapped[f"{prefix}.first.{idx}.{suffix}"] = value
-            else:
-                s, p = divmod(idx - split, split)
-                remapped[f"{prefix}.rest.{s}.{p}.{suffix}"] = value
-        elif flat_rest.match(key):
-            m = flat_rest.match(key)
-            prefix, idx, suffix = m.group(1), int(m.group(2)), m.group(3)
-            block_prefix = prefix[:-len(".rest")]
-            s, p = divmod(idx, sublayer_len(block_prefix))
-            remapped[f"{prefix}.{s}.{p}.{suffix}"] = value
-        else:
-            remapped[key] = value
-    return remapped
-
 
 def load_state_dict_flexible(model, state_dict, verbose=True):
     """
@@ -244,8 +216,7 @@ def load_state_dict_flexible(model, state_dict, verbose=True):
         return [], []
     except RuntimeError:
         pass
-    flat_rest = re.compile(r"\.rest\.\d+\.(weight|bias|running_mean|running_var|num_batches_tracked)$")
-    if any(".steps." in k or flat_rest.search(k) for k in state_dict):
+    if any(_is_legacy_key(k) for k in state_dict):
         candidate = remap_legacy_state_dict(state_dict)
     else:
         candidate = state_dict
