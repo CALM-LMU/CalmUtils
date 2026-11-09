@@ -24,6 +24,10 @@ dependencies = [
 [project.optional-dependencies]
 torch = ["torch"]
 ml = ["torch", "lightning"]
+test = ["pytest", "torch", "lightning"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [project.urls]
 "Homepage" = "https://github.com/CALM-LMU/CalmUtils"
