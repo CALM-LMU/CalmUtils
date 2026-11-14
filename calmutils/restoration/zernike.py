@@ -42,6 +42,23 @@ laterally, Rayleigh ranges (2 lambda/NA^2) axially - converted to px/planes
 via the axis sampling and odd-rounded.  Both return ``(psf, pixel_sizes)``
 with pixel sizes in the normalized units, for later conversion to nm.
 
+Optical model & assumptions:
+
+- **Scalar Fourier optics**: Models diffraction via scalar Fourier optics
+  (Debye approximation) with a flat circular pupil aperture. Neglects
+  polarization-dependent PSF distortion and high-NA apodization
+  (1/sqrt(cos theta)).
+- **Paraxial defocus**: Defocus through focus uses the quadratic Fresnel
+  phase term (NA^2 / (2 lambda n_ri) * rho^2). For very high NA/n_ri (> 0.7),
+  the spherical aberration physically induced by large defocus is omitted.
+- **Wavefront error convention**: Expansion coefficients are in waves of
+  peak polynomial amplitude at the pupil edge (R_n^|m|(1) = 1, standard Born &
+  Wolf / OSA), not RMS wavefront error. Orthonormal RMS coefficients differ
+  by sqrt(2(n+1) / (1 + delta_m0)).
+- **3D stack normalization**: Stacks return unit sum per lateral plane. When
+  using a stack as a 3D deconvolution kernel (e.g. in ``rl_deconvolve``),
+  the entire volume should be renormalized to sum to 1 (``st / st.sum()``).
+
 This module is standalone (not yet wired into synthetic.py / the metrics
 gallery); self-test: ``python -m calmutils.restoration.zernike``.
 """
@@ -54,6 +71,9 @@ __all__ = [
     "NOLL", "NAMED", "zernike_radial", "zernike", "noll",
     "pupil_mask", "wavefront", "output_pixel_size",
     "psf_2d", "psf_stack",
+    "AIRY_DIAMETER", "RAYLEIGH_RANGE",
+    "psf_2d_norm", "psf_stack_norm",
+    "psf_2d_phys", "psf_stack_phys",
 ]
 
 #: Noll j-index (j = 1, 2, ...) -> (n, m).  m > 0: cos mode, m < 0: sin mode.
@@ -63,8 +83,8 @@ NOLL = {
     4: (2, 0), 5: (2, -2), 6: (2, 2),
     7: (3, -1), 8: (3, 1), 9: (3, -3), 10: (3, 3),
     11: (4, 0), 12: (4, 2), 13: (4, -2), 14: (4, 4), 15: (4, -4),
-    16: (5, -1), 17: (5, 1), 18: (5, -3), 19: (5, 3), 20: (5, 5), 21: (5, -5),
-    22: (6, 0), 23: (6, -2), 24: (6, 2), 25: (6, -4), 26: (6, 4), 27: (6, 6), 28: (6, -6),
+    16: (5, 1), 17: (5, -1), 18: (5, 3), 19: (5, -3), 20: (5, 5), 21: (5, -5),
+    22: (6, 0), 23: (6, -2), 24: (6, 2), 25: (6, -4), 26: (6, 4), 27: (6, -6), 28: (6, 6),
 }
 
 #: Human-readable names for the common modes -> (n, m).
@@ -92,8 +112,9 @@ def zernike_radial(n, m, rho):
     """Radial Zernike polynomial R_n^|m|(rho).
 
     ``rho`` is the normalized pupil radius (1 at the pupil edge); ``n >= 0``,
-    ``|m| <= n``, ``n - |m|`` even.  Uses the OSA/ANSI normalization
-    (R_n^0(1) = 1).
+    ``|m| <= n``, ``n - |m|`` even.  Uses the unnormalized OSA/ANSI convention
+    (R_n^|m|(1) = 1), so coefficients represent peak amplitude at the pupil
+    edge in waves, rather than orthonormal RMS wavefront error.
     """
     n, m = int(n), int(m)
     am = abs(m)
@@ -161,7 +182,8 @@ def wavefront(n, coeffs, radius=None):
     """Wavefront error W(rho, theta) in waves on an ``n x n`` grid.
 
     ``coeffs``: see :func:`_norm_coeffs` ((n,m) dict, name dict, or Noll list).
-    Zero outside the pupil.
+    Values represent peak polynomial amplitude in waves (R_n^|m|(1) = 1),
+    not RMS wavefront error. Zero outside the pupil.
     """
     radius = float(radius) if radius is not None else n / 4.0
     rho, theta = _polar_grids(n, radius)
@@ -227,7 +249,7 @@ def psf_2d(coeffs, *, n=256, radius=None, crop=None):
 
 def psf_stack(coeffs, *, n=256, radius=None, crop=None, z_planes=1, dz=0.0,
               defocus_waves_per_z=0.5):
-    """3D PSF stack with defocus propagation.
+    """3D PSF stack with paraxial defocus propagation.
 
     Each z plane gets the extra wavefront
     ``W_defocus = z * defocus_waves_per_z * rho^2`` (waves), i.e. planes at
@@ -238,8 +260,11 @@ def psf_stack(coeffs, *, n=256, radius=None, crop=None, z_planes=1, dz=0.0,
     by the medium index n).  In normalized units (lambda = NA = 1) it is 0.5 by
     definition - 1 wave at the pupil edge per Rayleigh range - and
     :func:`psf_stack_norm` always uses that.  ``dz`` is in the same length
-    units as the caller's z.  Returns a unit-sum-per-plane stack of shape
-    ``(z_planes, *crop)`` (or ``(z_planes, n, n)``).
+    units as the caller's z.
+
+    Returns a unit-sum-per-plane stack of shape ``(z_planes, *crop)`` (or
+    ``(z_planes, n, n)``).  Note: if used as a 3D deconvolution kernel,
+    renormalize the entire 3D volume to unit sum (``st / st.sum()``).
     """
     radius = float(radius) if radius is not None else n / 4.0
     z_planes = int(z_planes)
@@ -422,13 +447,30 @@ def psf_2d_phys(coeffs, *, na, wavelength_nm, pixel_size_nm, shape=None,
     lat_unit_nm = float(wavelength_nm) / float(na)          # lambda/na in nm
     d_norm = float(pixel_size_nm) / lat_unit_nm              # target pixel in lambda/na units
     os_synth = max(0.25 / d_norm, 0.5)                       # never synthesize coarser than os=0.5
-    psf, (dy, dx) = psf_2d_norm(coeffs, oversample=os_synth, shape=None,
-                                shape_dist=shape_dist)
-    psf, eff = resample_psf(psf, (dy, dx), (d_norm, d_norm))  # onto the physical pixel
+    d_synth = 0.25 / os_synth
+
     if shape is not None:
-        s = _odd(shape) if np.isscalar(shape) else tuple(_odd(v) for v in shape)
-        psf = _center_crop(psf, s)
-        psf = psf / psf.sum()
+        s = (_odd(shape), _odd(shape)) if np.isscalar(shape) else tuple(_odd(v) for v in shape)
+        if len(s) != 2:
+            raise ValueError(f"shape must be scalar or have 2 entries, got {shape}")
+    else:
+        s = None
+
+    if np.isclose(os_synth, 0.25 / d_norm):
+        # Target pixel size can be synthesized directly without resampling
+        psf, (dy, dx) = psf_2d_norm(coeffs, oversample=os_synth, shape=s,
+                                    shape_dist=shape_dist)
+        eff = (dy, dx)
+    else:
+        # Undersampled laterally: synthesize at os=0.5 and resample to target pixel size
+        s_synth = tuple(_odd(v * d_norm / d_synth) for v in s) if s is not None else None
+        psf, (dy, dx) = psf_2d_norm(coeffs, oversample=os_synth, shape=s_synth,
+                                    shape_dist=shape_dist)
+        psf, eff = resample_psf(psf, (dy, dx), (d_norm, d_norm), out_size=s)
+        if s is not None:
+            psf = _center_crop(psf, s)
+            psf = psf / psf.sum()
+
     return psf, float(eff[0]) * lat_unit_nm
 
 
@@ -438,13 +480,17 @@ def psf_stack_phys(coeffs, *, na, wavelength_nm, pixel_size_nm, dz_nm, n_ri=1.0,
 
     Like :func:`psf_2d_phys`, plus ``dz_nm`` (axial plane spacing in nm) and
     ``n_ri`` (medium refractive index; axial unit n_ri*lambda/na^2 nm, i.e. the
-    Rayleigh range scales with n_ri).  ``shape`` is the output array shape
-    (sz, sy, sx) in px/planes; None -> ``shape_dist`` Rayleigh ranges on z,
-    Airy diameters on y/x.
+    Rayleigh range scales with n_ri).  Defocus propagation uses the paraxial
+    approximation.  ``shape`` is the output array shape (sz, sy, sx) in
+    px/planes; None -> ``shape_dist`` Rayleigh ranges on z, Airy diameters on
+    y/x.
 
     Returns
     -------
-    (stack, (dz_nm, dy_nm, dx_nm)) : unit-sum-per-plane stack + pixel sizes in nm
+    (stack, (dz_nm, dy_nm, dx_nm)) : unit-sum-per-plane stack + pixel sizes in nm.
+        Note: if passed as a 3D deconvolution kernel (e.g. to
+        :func:`~calmutils.restoration.rl_deconvolve`), renormalize the volume
+        to unit sum (``stack / stack.sum()``).
     """
     from .resampling import resample_psf
     lat_unit_nm = float(wavelength_nm) / float(na)
@@ -452,15 +498,32 @@ def psf_stack_phys(coeffs, *, na, wavelength_nm, pixel_size_nm, dz_nm, n_ri=1.0,
     d_norm = float(pixel_size_nm) / lat_unit_nm
     dz_norm = float(dz_nm) / ax_unit_nm
     os_synth = max(0.25 / d_norm, 0.5)
+    d_synth = 0.25 / os_synth
     os_z = 0.5 / dz_norm                                    # axial os is free (analytic planes)
-    st, (dz, dy, dx) = psf_stack_norm(coeffs, oversample=(os_z, os_synth, os_synth),
-                                     shape=None, shape_dist=shape_dist)
-    st, eff = resample_psf(st, (dz, dy, dx), (dz, d_norm, d_norm))  # lateral onto physical pixel
-    st = st / st.sum(axis=(1, 2), keepdims=True)  # resample_psf normalizes the whole stack
+
     if shape is not None:
-        s = tuple(_odd(v) for v in ([shape] * 3 if np.isscalar(shape) else shape))
-        st = _center_crop(st, s)
+        s = tuple(_odd(shape) for _ in range(3)) if np.isscalar(shape) else tuple(_odd(v) for v in shape)
+        if len(s) != 3:
+            raise ValueError(f"shape must be scalar or have 3 entries, got {shape}")
+    else:
+        s = None
+
+    if np.isclose(os_synth, 0.25 / d_norm):
+        # Target lateral pixel size can be synthesized directly without resampling
+        st, (dz, dy, dx) = psf_stack_norm(coeffs, oversample=(os_z, os_synth, os_synth),
+                                         shape=s, shape_dist=shape_dist)
+        eff = (dz, dy, dx)
+    else:
+        # Undersampled laterally: synthesize at os=0.5 and resample lateral axes
+        s_synth = (s[0], _odd(s[1] * d_norm / d_synth), _odd(s[2] * d_norm / d_synth)) if s is not None else None
+        st, (dz, dy, dx) = psf_stack_norm(coeffs, oversample=(os_z, os_synth, os_synth),
+                                         shape=s_synth, shape_dist=shape_dist)
+        st, eff = resample_psf(st, (dz, dy, dx), (dz, d_norm, d_norm), out_size=s)
         st = st / st.sum(axis=(1, 2), keepdims=True)
+        if s is not None:
+            st = _center_crop(st, s)
+            st = st / st.sum(axis=(1, 2), keepdims=True)
+
     return st, (float(eff[0]) * ax_unit_nm, float(eff[1]) * lat_unit_nm,
                 float(eff[2]) * lat_unit_nm)
 
@@ -543,6 +606,17 @@ def _selftest():
     same = bool(np.allclose(p1, p2))
     print(f"[psf] Noll dict {{8: 1}} == {{'coma_x': 1}}: {same}")
     ok &= same
+    # Noll parity rule: even j has m > 0 (cos), odd j has m < 0 (sin)
+    noll_parity_ok = True
+    for j, (nj, mj) in NOLL.items():
+        if mj != 0:
+            if j % 2 == 0 and mj <= 0:
+                noll_parity_ok = False
+            elif j % 2 == 1 and mj >= 0:
+                noll_parity_ok = False
+    print(f"[psf] Noll even=cos / odd=sin parity rule: {noll_parity_ok}")
+    ok &= noll_parity_ok
+    ok &= NOLL[16] == NAMED["secondary_coma_x"] and NOLL[17] == NAMED["secondary_coma_y"]
 
     # ---------------- normalized API: psf_2d_norm / psf_stack_norm ----------------
     psf, (dy, dx) = psf_2d_norm({})
@@ -626,6 +700,25 @@ def _selftest():
                              pixel_size_nm=px, dz_nm=100.0)
     ok &= stp3.shape[0] > 5
     print(f"[phys] 3D with defocus coeff: shape {stp3.shape} ok")
+
+    # explicit shapes in physical units (scalar, 2D tuple, 3D stack)
+    p2_s, px_s = psf_2d_phys({}, na=na, wavelength_nm=wl, pixel_size_nm=px, shape=65)
+    print(f"[phys] 2D explicit scalar shape=65: shape {p2_s.shape}, pixel {px_s:.1f} nm")
+    ok &= p2_s.shape == (65, 65) and abs(px_s - px) / px < 0.05
+    p2_rect, _ = psf_2d_phys({}, na=na, wavelength_nm=wl, pixel_size_nm=px, shape=(45, 65))
+    print(f"[phys] 2D explicit rect shape=(45, 65): shape {p2_rect.shape}")
+    ok &= p2_rect.shape == (45, 65)
+    stp_shape, (dz_s, dy_s, dx_s) = psf_stack_phys({}, na=na, wavelength_nm=wl,
+                                                  pixel_size_nm=px, dz_nm=100.0,
+                                                  shape=(15, 45, 45))
+    print(f"[phys] 3D explicit shape=(15, 45, 45): shape {stp_shape.shape}, "
+          f"dz={dz_s:.1f} dy=dx={dy_s:.1f} nm")
+    ok &= stp_shape.shape == (15, 45, 45) and abs(dz_s - 100.0) / 100.0 < 0.05
+
+    # undersampled physical pixel (d_norm > 0.5)
+    p2_under, px_u = psf_2d_phys({}, na=na, wavelength_nm=wl, pixel_size_nm=250.0, shape=21)
+    print(f"[phys] 2D undersampled (px=250nm): shape {p2_under.shape}, pixel {px_u:.1f} nm")
+    ok &= p2_under.shape == (21, 21) and abs(px_u - 250.0) / 250.0 < 0.05
 
     print("SELFTEST", "PASSED" if ok else "FAILED")
     return ok
