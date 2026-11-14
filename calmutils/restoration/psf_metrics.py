@@ -126,6 +126,121 @@ def _sidelobe_1d(cut):
     return out
 
 
+def _shell_median(arr):
+    """Median of the 2-voxel border shell, NaN-aware (background estimate)."""
+    mask = np.ones(arr.shape, dtype=bool)
+    mask[tuple(slice(2, s - 2) for s in arr.shape)] = False
+    if not mask.any():
+        mask[:] = True
+    vals = arr[mask]
+    vals = vals[np.isfinite(vals)]
+    return float(np.median(vals)) if vals.size else 0.0
+
+
+def second_moments(psf, psz=None, *, background="shell"):
+    """Flux-weighted second-moment (covariance) tensor of a PSF.
+
+    Unlike the 1D marginals of :func:`psf_metrics` (which are rotation-blind
+    within each plane), the full covariance tensor captures *oriented*
+    structure: an off-diagonal covariance in the (y, x) plane means the PSF is
+    elongated diagonally.
+
+    Parameters
+    ----------
+    psf : ndarray
+    psz : sequence of float, optional
+        Voxel size per axis. Physical-unit outputs are added if given, and the
+        orientation is then computed in physical space.
+    background : "shell" | float | None
+        Level subtracted before weighting, clipped at 0 ("shell" = NaN-aware
+        median of the 2-voxel border shell). The moments are pedestal-sensitive,
+        so a background estimate matters. None = no subtraction.
+
+    Returns
+    -------
+    dict with keys
+      centroid_px / centroid_phys : (ndim,) intensity centroid
+      sigma_px / sigma_phys       : (ndim,) sqrt of the covariance diagonal
+      covariance_px / covariance_phys : (ndim, ndim) covariance tensor
+      orientation_deg  : ndim >= 2 only. Angle of the major principal axis in
+                         the plane of the *last two* axes (y, x for ZYX), in
+                         degrees from the first of the two axes toward the
+                         second (45 = diagonal elongation). Computed in
+                         physical units when psz is given.
+      elongation       : ndim >= 2 only. sqrt(lambda_major / lambda_minor) of
+                         that plane's covariance block (1 = round).
+      sigma_major_px / sigma_minor_px (+ _phys) : principal-axis sigmas
+    All-NaN outputs if there is no positive signal after background subtraction.
+    """
+    psf = np.asarray(psf, dtype=float)
+    ndim = psf.ndim
+    if psz is not None:
+        psz = np.atleast_1d(np.asarray(psz, dtype=float))
+        if len(psz) != ndim:
+            raise ValueError(f"psz must have {ndim} entries to match psf dims")
+    w = np.where(np.isfinite(psf), psf, 0.0)
+    if background == "shell":
+        bg = _shell_median(psf)
+    elif background is None:
+        bg = 0.0
+    else:
+        bg = float(background)
+    w = np.clip(w - bg, 0.0, None)
+    tot = float(w.sum())
+    nan = float("nan")
+    if tot <= 0:
+        out = {"centroid_px": np.full(ndim, nan),
+               "sigma_px": np.full(ndim, nan),
+               "covariance_px": np.full((ndim, ndim), nan)}
+        if ndim >= 2:
+            out.update({"orientation_deg": nan, "elongation": nan,
+                        "sigma_major_px": nan, "sigma_minor_px": nan})
+        if psz is not None:
+            out["centroid_phys"] = np.full(ndim, nan)
+            out["sigma_phys"] = np.full(ndim, nan)
+            out["covariance_phys"] = np.full((ndim, ndim), nan)
+            if ndim >= 2:
+                out["sigma_major_phys"] = nan
+                out["sigma_minor_phys"] = nan
+        return out
+    grids = np.meshgrid(*[np.arange(s, dtype=float) for s in psf.shape],
+                        indexing="ij")
+    centroid = np.array([float((g * w).sum() / tot) for g in grids])
+    cov = np.empty((ndim, ndim))
+    for i in range(ndim):
+        di = grids[i] - centroid[i]
+        for j in range(ndim):
+            cov[i, j] = float((di * (grids[j] - centroid[j]) * w).sum() / tot)
+    out = {"centroid_px": centroid,
+           "sigma_px": np.sqrt(np.clip(np.diag(cov), 0.0, None)),
+           "covariance_px": cov}
+    if ndim >= 2:
+        block_px = cov[-2:, -2:]
+        block = (block_px * np.outer(psz[-2:], psz[-2:])) if psz is not None else block_px
+        # isotropy guard: for a round plane the angle is undefined (numerically
+        # arbitrary) -> define it as 0; threshold on the eigenvalue ratio so
+        # tiny window/noise anisotropy does not produce a random angle
+        lam_minor0, lam_major0 = np.linalg.eigvalsh(block)
+        if lam_minor0 <= 0 or lam_major0 <= lam_minor0 * (1.0 + 1e-6):
+            theta = 0.0
+        else:
+            theta = 0.5 * np.arctan2(2.0 * block[0, 1], block[0, 0] - block[1, 1])
+        lam_minor, lam_major = np.linalg.eigvalsh(block)
+        lam_minor_px, lam_major_px = np.linalg.eigvalsh(block_px)
+        out["orientation_deg"] = float(np.degrees(theta))
+        out["elongation"] = float(np.sqrt(lam_major / lam_minor)) if lam_minor > 0 else np.inf
+        out["sigma_minor_px"] = float(np.sqrt(max(lam_minor_px, 0.0)))
+        out["sigma_major_px"] = float(np.sqrt(max(lam_major_px, 0.0)))
+    if psz is not None:
+        out["centroid_phys"] = centroid * psz
+        out["sigma_phys"] = out["sigma_px"] * psz
+        out["covariance_phys"] = cov * np.outer(psz, psz)
+        if ndim >= 2:
+            out["sigma_minor_phys"] = float(np.sqrt(max(lam_minor, 0.0)))
+            out["sigma_major_phys"] = float(np.sqrt(max(lam_major, 0.0)))
+    return out
+
+
 def psf_metrics(psf, psz=None):
     """Profile-based (non-parametric) quantification of a PSF.
 
@@ -161,8 +276,15 @@ def psf_metrics(psf, psz=None):
       edge_level                     : window-border max / peak (wraparound
                                        indicator, same check resample_psf warns)
       truncated                      : any axis marginal truncated at the edge
+      orientation_deg, elongation, sigma_major_px, sigma_minor_px, covariance_px :
+                                       ndim >= 2 only - principal axes of the
+                                       last-two-axes plane from the 2nd-moment
+                                       tensor (see :func:`second_moments`);
+                                       captures diagonal elongation that the
+                                       1D marginals cannot see
       sum, min
       fwhm_phys, peak_offset_phys, ring_radius_phys : only if psz is given
+      covariance_phys, sigma_major_phys, sigma_minor_phys : only if psz is given
     """
     psf = np.asarray(psf, dtype=float)
     ndim = psf.ndim
@@ -231,6 +353,19 @@ def psf_metrics(psf, psz=None):
         out["peak_offset_phys"] = tuple((c - c0) * p
                                         for c, c0, p in zip(cen, center, psz))
         out["ring_radius_phys"] = tuple(r * p for r, p in zip(ring, psz))
+    if ndim >= 2:
+        sm = second_moments(psf, psz=psz)
+        out["orientation_deg"] = sm["orientation_deg"]
+        out["elongation"] = sm["elongation"]
+        out["sigma_major_px"] = sm["sigma_major_px"]
+        out["sigma_minor_px"] = sm["sigma_minor_px"]
+        out["covariance_px"] = tuple(tuple(float(v) for v in row)
+                                     for row in sm["covariance_px"])
+        if psz is not None:
+            out["covariance_phys"] = tuple(tuple(float(v) for v in row)
+                                           for row in sm["covariance_phys"])
+            out["sigma_major_phys"] = sm["sigma_major_phys"]
+            out["sigma_minor_phys"] = sm["sigma_minor_phys"]
     return out
 
 
