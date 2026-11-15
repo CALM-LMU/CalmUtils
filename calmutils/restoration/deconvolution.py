@@ -1,6 +1,7 @@
 import warnings
 
 import numpy as np
+import scipy.fft as _fft
 
 
 def _convolve_same(img, kernel):
@@ -98,6 +99,15 @@ def rl_deconvolve(observed, kernel, *, num_iter=25, bandlimit=None, edge="period
     - Initialization: u starts at the observed image (skimage starts at a
       constant 0.5 - same ML fixed point, different transient; the CalmUtils
       test cross-checks against skimage).
+    - Performance: the kernel OTFs (forward and adjoint) are transformed once
+      (not per convolution), FFT sizes are rounded up to fast lengths, and
+      transforms run through scipy.fft multithreaded - 4 FFTs per iteration
+      instead of 6+.
+    - The backprojection uses the ADJOINT of the forward operator, i.e.
+      convolution with the flipped kernel (RL is Poisson ML / EM, and the
+      update needs H^T). For symmetric kernels this is identical to the
+      forward kernel; for asymmetric kernels using the unflipped kernel is
+      not a descent direction and can diverge.
     """
     img = np.asarray(observed, dtype=float)
     ker = _prepare_kernel(kernel, img.ndim)
@@ -114,28 +124,59 @@ def rl_deconvolve(observed, kernel, *, num_iter=25, bandlimit=None, edge="period
     else:
         raise ValueError(f"unknown edge: {edge!r}")
 
+    ndim = img.ndim
+    axes = tuple(range(ndim))
+    # FFT sizes for the linear 'same' convolution. Any s >= img + ker - 1 gives
+    # the same cropped voxels, so round up to a fast (smooth) length - plain
+    # img + ker - 1 can contain large prime factors and be several times slower.
+    s = [_fft.next_fast_len(w + k - 1, real=(ax == ndim - 1))
+         for ax, (w, k) in enumerate(zip(work.shape, ker.shape))]
+    crop = tuple(slice((k - 1) // 2, (k - 1) // 2 + w)
+                 for w, k in zip(work.shape, ker.shape))
+    # thread pool overhead only pays off above a size threshold
+    workers = -1 if work.size >= 1 << 16 else 1
+
+    otf = _fft.rfftn(ker, s=s, axes=axes, workers=workers)
+    # adjoint OTF: convolution with the flipped kernel (the RL backprojection
+    # needs H^T, not H; identical to `otf` for symmetric kernels)
+    otf_adj = _fft.rfftn(ker[tuple(slice(None, None, -1) for _ in ker.shape)],
+                         s=s, axes=axes, workers=workers)
+
     mask = None
     if bandlimit is not None:
         bl = np.atleast_1d(np.asarray(bandlimit, dtype=float))
-        if len(bl) != img.ndim:
+        if len(bl) != ndim:
             raise ValueError("bandlimit must have one entry per axis")
-        mask = np.ones(work.shape)
-        for ax in range(img.ndim):
-            f = np.fft.fftfreq(work.shape[ax])
-            shape = [1] * img.ndim
+        # bandlimit projection at native resolution, in the rfft half-spectrum
+        # (equivalent to a full fftn * mask for real input, half the work)
+        mshape = list(work.shape)
+        mshape[-1] = work.shape[-1] // 2 + 1
+        mask = np.ones(mshape)
+        for ax in range(ndim):
+            f = (_fft.rfftfreq if ax == ndim - 1 else _fft.fftfreq)(work.shape[ax])
+            shape = [1] * ndim
             shape[ax] = -1
             mask *= (np.abs(f) <= bl[ax]).reshape(shape)
 
+    if damp is not None:
+        damp = float(damp)
     u = work.copy()
     for _ in range(int(num_iter)):
-        conv = _convolve_same(u, ker)
+        U = _fft.rfftn(u, s=s, axes=axes, workers=workers)
+        U *= otf
+        conv = _fft.irfftn(U, s=s, axes=axes, workers=workers)[crop]
         denom = np.maximum(conv, eps)
         if damp is not None:
-            denom = np.maximum(denom, float(damp))
-        u = u * _convolve_same(work / denom, ker)
-        u = np.maximum(u, 0.0)
+            denom = np.maximum(denom, damp)
+        R = _fft.rfftn(work / denom, s=s, axes=axes, workers=workers)
+        R *= otf_adj
+        u *= _fft.irfftn(R, s=s, axes=axes, workers=workers)[crop]
+        np.maximum(u, 0.0, out=u)
         if mask is not None:
-            u = np.maximum(np.fft.ifftn(np.fft.fftn(u) * mask).real, 0.0)
+            U = _fft.rfftn(u, axes=axes, workers=workers)
+            U *= mask
+            u = np.maximum(_fft.irfftn(U, s=work.shape, axes=axes,
+                                       workers=workers), 0.0)
 
     if pad is not None:
         u = u[tuple(slice(p0, p0 + n) for (p0, _), n in zip(pad, img.shape))]
