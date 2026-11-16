@@ -75,10 +75,10 @@ def main():
     fx_b, fz_b = _bead_fwhm(d_b, y, x)
     print(f"[raw]   view A x={fx_a:.2f} z={fz_a:.2f} | view B x={fx_b:.2f} z={fz_b:.2f}")
 
-    s_a = rl_deconvolve(d_a, psf_a, num_iter=40, edge="periodic")
-    s_b = rl_deconvolve(d_b, psf_b, num_iter=40, edge="periodic")
+    s_a = rl_deconvolve(d_a, psf_a, num_iter=40, padding=None)
+    s_b = rl_deconvolve(d_b, psf_b, num_iter=40, padding=None)
     j = rl_deconvolve_multiview([d_a, d_b], [psf_a, psf_b], num_iter=40, bg=2.0,
-                                init="bluravg", edge="periodic")
+                                padding=None)
     jx_a, jz_a = _bead_fwhm(s_a, y, x)
     jx_b, jz_b = _bead_fwhm(s_b, y, x)
     jx, jz = _bead_fwhm(j, y, x)
@@ -95,18 +95,16 @@ def main():
     # non-negativity and shape
     ok &= j.shape == d_a.shape and (j >= 0).all()
 
-    # init variants all run
-    for init in ("flat", "bluravg", "backproj"):
-        s = rl_deconvolve_multiview([d_a, d_b], [psf_a, psf_b], num_iter=3, bg=2.0,
-                                    init=init)
-        ok &= s.shape == d_a.shape and (s >= 0).all()
-    print("[init]  flat / bluravg / backproj all run")
+    # blurred-avg init runs
+    s = rl_deconvolve_multiview([d_a, d_b], [psf_a, psf_b], num_iter=3, bg=2.0)
+    ok &= s.shape == d_a.shape and (s >= 0).all()
+    print("[init]  blurred-avg init runs")
 
     # validation errors
     for bad in (
         lambda: rl_deconvolve_multiview([d_a, d_b], [psf_a]),                      # len mismatch
         lambda: rl_deconvolve_multiview([d_a, d_b[:, :-1]], [psf_a, psf_b]),        # shape mismatch
-        lambda: rl_deconvolve_multiview([d_a], [np.ones((20, 20)) / 400]),           # even kernel
+        lambda: rl_deconvolve_multiview([d_a], [np.ones((3, 3, 3))]),                 # kernel ndim mismatch
         lambda: rl_deconvolve_multiview([d_a], [psf_a], bg=[1.0, 2.0]),             # bg len
     ):
         try:

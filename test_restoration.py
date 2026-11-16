@@ -3,8 +3,8 @@
 scratchbook PSF pipeline into calmutils:
 
   calmutils.restoration.subpixel_shift / rl_deconvolve / resample_psf /
-      psf_metrics / profile_metrics / axis_profile / encircled_energy /
-      radius_at_fraction
+      psf_metrics / profile_metrics / axis_profile / second_moments /
+      synthetic_psf / encircled_energy / radius_at_fraction
   calmutils.morphology.bead_kernel
   calmutils.localization.util.nearest_neighbor_distances
 
@@ -21,7 +21,7 @@ import numpy as np
 
 from calmutils.restoration import (
     subpixel_shift, rl_deconvolve, resample_psf,
-    axis_profile, profile_metrics, psf_metrics,
+    axis_profile, profile_metrics, psf_metrics, second_moments, synthetic_psf,
     encircled_energy, radius_at_fraction,
 )
 from calmutils.restoration.deconvolution import _convolve_same
@@ -104,7 +104,8 @@ def main():
     ok &= all(abs(s_bl[ax] / sigma_true[ax] - 1) < 0.10 for ax in range(3))
     ok &= ours_d.min() >= 0.0 and abs(ours_d.sum() / obs5.sum() - 1.0) < 0.05
 
-    # kernel guards: off-center warns, negative clipped+warns, even shape raises
+    # kernel guards: lopsided and even-shaped kernels accepted, negative
+    # clipped+warns
     k_big = bead_kernel((50.0, 50.0, 50.0), 200.0)  # 5^3
     k_off = subpixel_shift(k_big, (0.3, 0.0, 0.0))
     with warnings.catch_warnings(record=True) as wl:
@@ -118,35 +119,35 @@ def main():
     neg_w = any("negative" in str(w.message) for w in wl)
     try:
         rl_deconvolve(obs5, np.ones((4, 4, 4)), num_iter=1)
-        even_raises = False
+        even_ok = True
     except ValueError:
-        even_raises = True
-    print(f"[rl] guards: off-center warns {off_w}, negative warns {neg_w}, "
-          f"even kernel raises {even_raises}")
-    ok &= off_w and neg_w and even_raises
+        even_ok = False
+    print(f"[rl] guards: off-center silent {not off_w}, negative warns {neg_w}, "
+          f"even kernel accepted {even_ok}")
+    ok &= (not off_w) and neg_w and even_ok
 
-    # edge="reflect": corner blob stays at the corner; periodic wraps it
+    # padding="reflect": corner blob stays at the corner; padding=None (zero border) differs
     rng3 = np.random.default_rng(3)
     img_b = np.zeros((40, 40)); img_b[0, 0] = 100.0
     k_b = _gaussian_volume((9, 9), (2.0, 2.0)); k_b /= k_b.sum()
     obs_b = _convolve_same(np.pad(img_b, 20, mode="constant"), k_b)[20:-20, 20:-20]
     obs_b = obs_b + rng3.poisson(0.5, obs_b.shape)
-    rec_r = rl_deconvolve(obs_b, k_b, num_iter=60, edge="reflect")
-    rec_p = rl_deconvolve(obs_b, k_b, num_iter=60, edge="periodic")
+    rec_r = rl_deconvolve(obs_b, k_b, num_iter=60, padding="reflect")
+    rec_p = rl_deconvolve(obs_b, k_b, num_iter=60, padding=None)
     pk_r = np.unravel_index(np.argmax(rec_r), rec_r.shape)
     pk_p = np.unravel_index(np.argmax(rec_p), rec_p.shape)
     ghost_r, ghost_p = rec_r[33:, 33:].sum(), rec_p[33:, 33:].sum()
-    print(f"[rl] reflect peak {pk_r} (true (0,0)); periodic peak {pk_p}; "
+    print(f"[rl] reflect peak {pk_r} (true (0,0)); no-padding peak {pk_p}; "
           f"far-corner mass {ghost_r:.2e} vs {ghost_p:.2e}; flux {rec_r.sum() / obs_b.sum():.3f}")
     ok &= abs(pk_r[0]) <= 1 and abs(pk_r[1]) <= 1
     ok &= ghost_p > ghost_r and 0.8 < rec_r.sum() / obs_b.sum() < 1.05
 
-    # edge="reflect" in 3D with a non-cubic kernel (pad needs per-axis pairs)
+    # padding="reflect" in 3D with a non-cubic kernel (pad needs per-axis pairs)
     img3 = np.zeros((24, 30, 30))
     img3[2, 3, 3] = 100.0
     k3 = _gaussian_volume((5, 9, 9), (1.0, 2.0, 2.0)); k3 /= k3.sum()
     obs3 = _convolve_same(np.pad(img3, 40, mode="constant"), k3)[40:-40, 40:-40, 40:-40]
-    rec3 = rl_deconvolve(obs3, k3, num_iter=40, edge="reflect")
+    rec3 = rl_deconvolve(obs3, k3, num_iter=40, padding="reflect")
     pk3 = np.unravel_index(np.argmax(rec3), rec3.shape)
     print(f"[rl] 3D reflect with non-cubic kernel: peak {pk3} (true (2,3,3)), "
           f"shape {rec3.shape} == input {obs3.shape}")
@@ -268,6 +269,83 @@ def main():
     ok &= 5 < m4b["ring_radius_px"][2] < 9
     ok &= abs(m4b["sidelobe_asym"]) < 0.2
     ok &= abs(m4b["sidelobe_left"] - m4b["sidelobe_right"]) < 0.05
+
+    # ---------------- second_moments / orientation ----------------
+    g_sm = _gaussian_volume((21, 31, 31), (2.0, 3.0, 3.0))
+    g_sm /= g_sm.sum()
+    sm = second_moments(g_sm)
+    print(f"[moments] clean Gaussian: sigma_px {np.round(sm['sigma_px'], 3)} vs (2, 3, 3), "
+          f"orientation {sm['orientation_deg']:+.2f} deg (expect ~0), "
+          f"elongation {sm['elongation']:.3f} (expect ~1)")
+    ok &= np.allclose(sm["sigma_px"], [2.0, 3.0, 3.0], atol=0.1)
+    ok &= np.allclose(sm["covariance_px"], np.diag([4.0, 9.0, 9.0]), atol=0.5)
+    ok &= abs(sm["orientation_deg"]) < 2.0 and abs(sm["elongation"] - 1.0) < 0.05
+
+    # diagonal elongation at 45 deg, elongation 2: invisible to the 1D marginals
+    # (astigmatism ~ 0), captured by the 2nd-moment tensor
+    psf_rot = synthetic_psf((21, 41, 41), (2.0, 2.5, 2.5),
+                            orientation_deg=45.0, elongation=2.0)
+    sm_r = second_moments(psf_rot, psz=(100.0, 50.0, 50.0))
+    m_r = psf_metrics(psf_rot, psz=(100.0, 50.0, 50.0))
+    print(f"[moments] rotated: orientation {sm_r['orientation_deg']:+.1f} deg (truth 45), "
+          f"elongation {sm_r['elongation']:.2f} (truth 2); psf_metrics keys: "
+          f"{m_r['orientation_deg']:+.1f} deg, {m_r['elongation']:.2f}, "
+          f"astigmatism {m_r['astigmatism']:+.3f} (marginals stay ~round), "
+          f"sigma major/minor phys {m_r['sigma_major_phys']:.0f}/"
+          f"{m_r['sigma_minor_phys']:.0f} nm")
+    ok &= abs(sm_r["orientation_deg"] - 45.0) < 2.0
+    ok &= abs(sm_r["elongation"] - 2.0) < 0.1
+    ok &= abs(m_r["orientation_deg"] - 45.0) < 2.0 and abs(m_r["elongation"] - 2.0) < 0.1
+    ok &= abs(m_r["astigmatism"]) < 0.15  # diagonal elongation is NOT astigmatism
+    # physical: sigma_major = 2.5 * 2 = 5 px -> 250 nm lateral
+    ok &= abs(m_r["sigma_major_phys"] - 250.0) / 250.0 < 0.1
+    ok &= abs(m_r["sigma_minor_phys"] - 125.0) / 125.0 < 0.1
+
+    # negative angle, anisotropic psz: orientation computed in physical space
+    psf_neg = synthetic_psf((15, 41, 41), (2.0, 2.5, 2.5),
+                            orientation_deg=-30.0, elongation=1.5)
+    sm_n = second_moments(psf_neg, psz=(100.0, 50.0, 50.0))
+    print(f"[moments] -30 deg: orientation {sm_n['orientation_deg']:+.1f} deg, "
+          f"elongation {sm_n['elongation']:.2f} (truth 1.5)")
+    ok &= abs(sm_n["orientation_deg"] + 30.0) < 2.0
+    ok &= abs(sm_n["elongation"] - 1.5) < 0.1
+
+    # background pedestal must not distort the moments (shell subtraction)
+    psf_bg = psf_rot + 0.1 * psf_rot.max()
+    sm_bg = second_moments(psf_bg)
+    print(f"[moments] with pedestal: orientation {sm_bg['orientation_deg']:+.1f} deg, "
+          f"elongation {sm_bg['elongation']:.2f} (shell-subtracted, expect ~45 / ~2)")
+    ok &= abs(sm_bg["orientation_deg"] - 45.0) < 3.0
+    ok &= abs(sm_bg["elongation"] - 2.0) < 0.15
+
+    # synthetic_psf ground truths for the other metrics
+    psf_ast = synthetic_psf((21, 31, 31), (2.0, 2.5, 2.5), astigmatism=0.4)
+    m_ast2 = psf_metrics(psf_ast)
+    print(f"[synthetic] astigmatism=0.4 -> metric {m_ast2['astigmatism']:+.3f}")
+    ok &= abs(m_ast2["astigmatism"] - 0.4) < 0.05
+    psf_coma = synthetic_psf((21, 31, 31), (2.0, 2.5, 2.5), coma=1.0,
+                              coma_sigma=4.0, coma_shift=5.0)
+    m_coma = psf_metrics(psf_coma)
+    print(f"[synthetic] coma=1.0 -> asymmetry_x {m_coma['asymmetry_px'][2]:+.3f}, "
+          f"skew_x {m_coma['skew'][2]:+.3f} (expect > 0)")
+    ok &= m_coma["asymmetry_px"][2] > 0.1 and m_coma["skew"][2] > 0.1
+    psf_ring = synthetic_psf((21, 41, 41), (2.0, 2.5, 2.5), ring_radius=6.0)
+    m_ring = psf_metrics(psf_ring)
+    print(f"[synthetic] donut ring_radius=6 -> ring_radius_px "
+          f"{np.round(m_ring['ring_radius_px'], 1)} (true donut reads as the "
+          f"diameter ~2R = 12), sidelobe_ratio {m_ring['sidelobe_ratio']:.3f} (~1)")
+    ok &= 10.5 < m_ring["ring_radius_px"][2] < 13.5
+    ok &= m_ring["sidelobe_ratio"] > 0.8
+    psf_off = synthetic_psf((21, 41, 41), (2.0, 2.5, 2.5), offset=(0.0, 1.5, -2.0))
+    m_off = psf_metrics(psf_off)
+    print(f"[synthetic] offset (0, 1.5, -2) -> peak_offset_px "
+          f"{np.round(m_off['peak_offset_px'], 2)}")
+    ok &= np.allclose(m_off["peak_offset_px"], [0.0, 1.5, -2.0], atol=0.15)
+    # empty input -> NaN moments, no crash
+    sm_empty = second_moments(np.full((5, 5), np.nan))
+    ok &= np.isnan(sm_empty["orientation_deg"]) and np.isnan(sm_empty["elongation"])
+    print(f"[moments] all-NaN input -> orientation NaN: "
+          f"{bool(np.isnan(sm_empty['orientation_deg']))}")
 
     # ---------------- kernel weights / ESS ----------------
     pts_k = np.array([[0., 0.], [3., 0.], [0., 4.], [30., 30.]])
