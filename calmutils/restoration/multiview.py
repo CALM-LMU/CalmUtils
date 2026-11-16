@@ -2,11 +2,18 @@
 
 The same object is observed through several DIFFERENT point spread functions
 (e.g. a STED microscope run with different depletion patterns, giving one
-image per pattern). Each view obeys ``d_i ~ Poisson(bg_i + h_i * s)`` with one
-shared latent object ``s``; the joint Poisson ML update is the multiview
+image per pattern). Each view obeys ``d_i ~ Poisson(bg_i + a_i h_i * s)`` with
+one shared latent object ``s``, unit-sum PSFs ``h_i`` and per-view relative
+brightness ``a_i``; the joint Poisson ML update is the multiview
 Richardson-Lucy iteration
 
-    u <- u * mean_i( flip(h_i) * [ d_i / (bg_i + h_i * u) ] )
+    u <- u * sum_i( a_i H_i^T [ d_i / (bg_i + a_i H_i u) ] ) / sum_i( a_i H_i^T 1 )
+
+(H_i = convolution with h_i, H_i^T = correlation, i.e. convolution with
+flip(h_i)). The a_i are part of the forward model, not ad-hoc weights: with
+them in place the likelihood weights each view by the photons it carries.
+For equally bright views and away from the border this reduces to the plain
+mean of the single-view RL factors.
 
 The fused Fourier passband is the UNION of the per-view OTF supports (weighted
 by SNR where they overlap), so the joint estimate can be sharper along an axis
@@ -18,11 +25,13 @@ import scipy.fft as _fft
 from scipy.ndimage import gaussian_filter
 
 from .deconvolution import (_prepare_kernel, _convolve_same_fft_shape_crop,
-                            _rl_update_factor, _bandlimit_mask, _apply_bandlimit)
+                            _rl_update_factor, _adjoint_of_ones,
+                            _bandlimit_mask, _apply_bandlimit)
 
 
 def rl_deconvolve_multiview(views, kernels, *, num_iter=25, bg=0.0,
-                            bandlimit=None, padding=None, damp=None):
+                            bandlimit=None, padding=None, damp=None,
+                            view_scales=None):
     """Joint multiview Richardson-Lucy deconvolution (Poisson ML).
 
     Parameters
@@ -34,7 +43,8 @@ def rl_deconvolve_multiview(views, kernels, *, num_iter=25, bg=0.0,
     kernels : sequence of ndarray
         One impulse response / PSF per view, same length as ``views``. Each kernel
         is validated/normalized by :func:`_prepare_kernel` (non-negative,
-        unit sum).
+        unit sum) - the relative brightness of the views is NOT taken from
+        the kernel sums, see ``view_scales``.
     num_iter : int
         RL iterations.
     bg : float, ndarray, or sequence thereof
@@ -45,21 +55,33 @@ def rl_deconvolve_multiview(views, kernels, *, num_iter=25, bg=0.0,
         biases RL strongly, so estimate it per view.
     bandlimit : sequence of float, optional
         Per-axis OTF cutoff in cycles per voxel, applied after every iteration
-        (same semantics as in :func:`rl_deconvolve`).
+        (same semantics and approximations as in :func:`rl_deconvolve`).
     padding : None | "reflect"
         None (default): no padding - linear convolution with an implicit zero
         border; fine for PSF windows that decay to ~0 at the border.
         "reflect": pads every view by the max kernel half-width across views
         (k//2 per side) with mirrored content - use for full samples.
     damp : float, optional
-        Denominator floor ``max(conv + bg, damp)``, on top of a tiny fixed
-        division guard; set relative to the observed peak, e.g.
-        ``damp=1e-3 * max(view.max())``.
+        Denominator floor ``max(a_i * conv_i + bg_i, damp)``, on top of a tiny
+        fixed division guard; set relative to the observed peak, e.g.
+        ``damp=1e-3 * max(v.max() for v in views)``. A floor, not skimage's
+        filter_epsilon behaviour, and it pushes regions dimmer than ``damp``
+        towards zero (see :func:`rl_deconvolve`).
+    view_scales : None | sequence of float
+        Relative brightness a_i of each view in the forward model
+        ``y_i = a_i H_i u + bg_i`` (PSF integral, laser power, dwell time,
+        bleaching between acquisitions, ...). None (default): estimated from
+        the data as the bg-subtracted total flux of each view. A sequence
+        gives one positive value per view, e.g. the sums of physically
+        scaled PSFs. Either way the scales are normalized to mean 1, so only
+        their ratios matter. These are model parameters, not quality weights:
+        do not use them to down-weight a view by hand.
 
     Returns
     -------
-    ndarray, same shape as each view, non-negative. Not renormalized (RL
-    approximately conserves total flux with unit-sum kernels).
+    ndarray, same shape as each view, non-negative. Not renormalized: in the
+    units of a view of average brightness (scale 1), with total flux
+    approximately the mean bg-subtracted flux of the views.
 
     Notes
     -----
@@ -67,7 +89,7 @@ def rl_deconvolve_multiview(views, kernels, *, num_iter=25, bg=0.0,
     and flipped) are transformed once up front, FFT sizes are rounded up to
     fast lengths, the spectrum of the current estimate is shared across views,
     and transforms run through scipy.fft multithreaded. Cost per iteration is
-    2 + 2*len(views) FFTs instead of 6*len(views).
+    1 + 3*len(views) FFTs instead of 6*len(views).
     """
     
     # clip positive and sanity check input views
@@ -113,6 +135,23 @@ def rl_deconvolve_multiview(views, kernels, *, num_iter=25, bg=0.0,
         norm_bg.append(np.pad(b, pad, mode="reflect") if pad is not None else b)
     bg = norm_bg
 
+    # per-view brightness a_i (forward model y_i = a_i H_i u + bg_i),
+    # normalized to mean 1
+    if view_scales is None:
+        # bg-subtracted total flux: sum(H_i u) = sum(u) for unit-sum kernels,
+        # so the flux ratio between views is the brightness ratio
+        scales = np.array([float(np.sum(v - b)) for v, b in zip(work, bg)])
+        if np.any(scales <= 0):
+            raise ValueError("cannot estimate view_scales: a view has no "
+                             "flux above its bg")
+    else:
+        scales = np.asarray(view_scales, dtype=float)
+        if scales.shape != (len(views),):
+            raise ValueError("view_scales must have one entry per view")
+        if not np.all(np.isfinite(scales)) or np.any(scales <= 0):
+            raise ValueError("view_scales must be positive and finite")
+    scales = scales / scales.mean()
+
     # FFT sizes for the linear 'same' convolutions, shared by all views: any
     # s >= work + ker - 1 per axis gives the same cropped voxels, so use the
     # max kernel extent (fast lengths come from the helper).
@@ -133,10 +172,20 @@ def rl_deconvolve_multiview(views, kernels, *, num_iter=25, bg=0.0,
 
     axes = tuple(range(ndim))
 
-    # per-view OTFs computed once: forward kernel and flipped (adjoint) kernel
-    otf = [_fft.rfftn(k, s=s, axes=axes, workers=workers) for k in kernels]
-    otf_flip = [_fft.rfftn(k[tuple(slice(None, None, -1) for _ in k.shape)],
-                           s=s, axes=axes, workers=workers) for k in kernels]
+    # per-view OTFs computed once: forward kernel and flipped (adjoint) kernel,
+    # both scaled by the view brightness a_i, so _rl_update_factor returns
+    # a_i H_i^T(d_i / (a_i H_i u + bg_i))
+    otf = [a * _fft.rfftn(k, s=s, axes=axes, workers=workers)
+           for a, k in zip(scales, kernels)]
+    otf_flip = [a * _fft.rfftn(k[tuple(slice(None, None, -1) for _ in k.shape)],
+                               s=s, axes=axes, workers=workers)
+                for a, k in zip(scales, kernels)]
+
+    # RL normalization sum_i a_i H_i^T 1 (= nviews in the interior, smaller
+    # near the border where part of the kernels falls outside the window)
+    norm = np.zeros(work[0].shape)
+    for of, ca in zip(otf_flip, crops_adj):
+        norm += _adjoint_of_ones(work[0].shape, of, s, ca, axes, workers)
 
     mask = (_bandlimit_mask(work[0].shape, bandlimit, ndim)
             if bandlimit is not None else None)
@@ -163,8 +212,9 @@ def rl_deconvolve_multiview(views, kernels, *, num_iter=25, bg=0.0,
                                       crops[i], crops_adj[i], axes, workers,
                                       damp, bg[i])
         
-        # multiply with averaged single-view updates
-        u *= corr / nviews
+        # multiply with the summed per-view updates, normalized
+        u *= corr
+        u /= norm
         np.maximum(u, 0.0, out=u)
         if mask is not None:
             u = _apply_bandlimit(u, mask, axes, workers)

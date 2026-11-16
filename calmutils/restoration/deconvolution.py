@@ -4,6 +4,7 @@ import numpy as np
 import scipy.fft as _fft
 
 EPS = 1e-12  # fixed numerical division guard (0/0);
+HT1_FLOOR = 1e-6  # floor for the RL normalization H^T 1 (see _adjoint_of_ones)
 
 
 def _convolve_same(img, kernel):
@@ -74,7 +75,8 @@ def _rl_update_factor(U, observed, otf, otf_adj, s, crop, crop_adj,
     (not mutated). otf/otf_adj are the view's forward/adjoint OTFs, crop/
     crop_adj the forward/adjoint 'same' crops (see
     :func:`_convolve_same_fft_shape_crop`). Single-view RL applies it as
-    ``u *= factor``; multi-view averages the factors over views first."""
+    ``u *= factor / (H^T 1)``; multi-view sums the factors over views and
+    divides by the summed H_i^T 1 (see :func:`_adjoint_of_ones`)."""
     conv = _fft.irfftn(U * otf, s=s, axes=axes, workers=workers)[crop]
     denom = np.maximum(conv + bg, EPS)
     if damp is not None:
@@ -84,9 +86,23 @@ def _rl_update_factor(U, observed, otf, otf_adj, s, crop, crop_adj,
     return _fft.irfftn(R, s=s, axes=axes, workers=workers)[crop_adj]
 
 
+def _adjoint_of_ones(shape, otf_adj, s, crop_adj, axes, workers):
+    """H^T 1 for a 'same' convolution with implicit zero border: the per-voxel
+    sensitivity (how much of the kernel mass around a voxel lands inside the
+    observed window). 1 in the interior for a unit-sum kernel, < 1 within a
+    kernel half-width of the border. The RL update divides by it; floored at
+    HT1_FLOOR so voxels the data (almost) does not see stay finite."""
+    O = _fft.rfftn(np.ones(shape), s=s, axes=axes, workers=workers)
+    O *= otf_adj
+    ht1 = _fft.irfftn(O, s=s, axes=axes, workers=workers)[crop_adj]
+    return np.maximum(ht1, HT1_FLOOR)
+
+
 def _bandlimit_mask(shape, bandlimit, ndim):
     """Float mask over the rfft half-spectrum of an array with `shape`,
-    passing only frequencies within `bandlimit` (cycles per voxel, per axis)."""
+    passing only frequencies within `bandlimit` (cycles per voxel, per axis).
+    The passband is the product of per-axis cutoffs, i.e. a box, not an
+    ellipsoid."""
     bl = np.atleast_1d(np.asarray(bandlimit, dtype=float))
     if len(bl) != ndim:
         raise ValueError("bandlimit must have one entry per axis")
@@ -103,7 +119,10 @@ def _bandlimit_mask(shape, bandlimit, ndim):
 
 def _apply_bandlimit(u, mask, axes, workers):
     """Project u onto the bandlimit mask (native resolution, rfft half-spectrum
-    = half the work of a full fftn * mask for real input), clipped at 0."""
+    = half the work of a full fftn * mask for real input), clipped at 0.
+    The transform is periodic over u (no padding), so ringing from the hard
+    cutoff can wrap around to the opposite edge; the clip reintroduces a
+    little out-of-band content."""
     U = _fft.rfftn(u, axes=axes, workers=workers)
     U *= mask
     return np.maximum(_fft.irfftn(U, s=u.shape, axes=axes, workers=workers), 0.0)
@@ -113,8 +132,12 @@ def rl_deconvolve(observed, kernel, *, num_iter=25, bandlimit=None, padding=None
                   damp=None, bg=0.0):
     """Richardson-Lucy deconvolution with a known kernel (Poisson ML).
 
-    The output is not renormalized: with a unit-sum kernel RL
-    approximately conserves total flux (minus optional background).
+    The update is ``u <- u * H^T(d / (H u + bg)) / (H^T 1)``. The H^T 1
+    normalization is 1 in the interior and < 1 near the border, where part of
+    the kernel falls outside the observed window; without it, signal at the
+    border is driven to zero and rings. The output is not renormalized: with
+    a unit-sum kernel RL approximately conserves total flux (minus optional
+    background).
 
     Parameters
     ----------
@@ -135,18 +158,32 @@ def rl_deconvolve(observed, kernel, *, num_iter=25, bandlimit=None, padding=None
         each iteration. This - not a generic image prior like TV - is the
         principled regularizer here, because the OTF support is known optics.
         Set it AT the true cutoff, not below. None = no explicit band limit.
+        Approximations: the passband is a per-axis box (not an ellipsoid, so
+        diagonal frequencies up to the corner of the box pass); the
+        projection is a periodic FFT over the (padded) working array, so its
+        ringing can wrap around to the opposite edge; and the result is
+        clipped at 0 afterwards, which puts a little out-of-band content
+        back.
     padding : None | "reflect"
         None (default): no padding - FFT sizes are >= image + kernel - 1, so
         the convolution is linear with an implicit zero border (nothing wraps
-        around). Correct for small PSF windows that decay to ~0 at the border.
+        around), i.e. the object is modelled as zero outside the window. The
+        H^T 1 normalization keeps this stable for signal at the border, but
+        light from structures just outside the window is then attributed to
+        the edge voxels.
         "reflect": pads the observed image by the kernel half-width (k//2 per
-        side) with mirrored content, deconvolves, and crops back - use for
-        full samples, where a zero border would bias the edges.
+        side) with mirrored content, deconvolves, and crops back - usually
+        the better choice for full samples that continue beyond the window.
     damp : float, optional
-        Denominator floor in the RL division (skimage's filter_epsilon-style):
-        ``denom = max(conv, damp)``, on top of a tiny fixed division guard.
-        A cheap extra damper for near-cutoff noise; set relative to the
-        observed peak, e.g. ``damp=1e-3*observed.max()``. None = off.
+        Denominator floor in the RL division: ``denom = max(conv + bg, damp)``,
+        on top of a tiny fixed division guard. A cheap extra damper for
+        near-cutoff noise; set relative to the observed peak, e.g.
+        ``damp=1e-3*observed.max()``. None = off.
+        Same purpose as skimage's filter_epsilon but not the same behaviour:
+        skimage sets the ratio to 0 where conv is below the threshold, this
+        only floors the denominator. Side effect: where both the model and
+        the observed image are below ``damp`` the ratio is < 1, so dim
+        regions are pushed towards zero a little more every iteration.
     bg : float or ndarray, optional
         Background in the forward model ``y = H u + bg`` (detector offset,
         out-of-focus haze, measured bg map), added in the RL denominator.
@@ -215,12 +252,15 @@ def rl_deconvolve(observed, kernel, *, num_iter=25, bandlimit=None, padding=None
     otf_adj = _fft.rfftn(ker[tuple(slice(None, None, -1) for _ in ker.shape)],
                          s=s, axes=axes, workers=workers)
 
+    # RL normalization H^T 1 (!= 1 near the border, see _adjoint_of_ones)
+    ht1 = _adjoint_of_ones(work.shape, otf_adj, s, crop_adj, axes, workers)
+
     mask = (_bandlimit_mask(work.shape, bandlimit, ndim)
             if bandlimit is not None else None)
 
     if damp is not None:
         damp = float(damp)
-    
+
     # init: bg-subtracted observed image (the estimate u is bg-free; bg lives
     # only in the denominator). Floor at a small positive value relative to the
     # data scale: the RL update is multiplicative, so exact zeros stay zero.
@@ -234,6 +274,7 @@ def rl_deconvolve(observed, kernel, *, num_iter=25, bandlimit=None, padding=None
         U = _fft.rfftn(u, s=s, axes=axes, workers=workers)
         u *= _rl_update_factor(U, work, otf, otf_adj, s, crop, crop_adj,
                                axes, workers, damp, bg)
+        u /= ht1
         np.maximum(u, 0.0, out=u)
         if mask is not None:
             u = _apply_bandlimit(u, mask, axes, workers)
