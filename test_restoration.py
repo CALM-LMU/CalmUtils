@@ -126,30 +126,30 @@ def main():
           f"even kernel accepted {even_ok}")
     ok &= (not off_w) and neg_w and even_ok
 
-    # padding="reflect": corner blob stays at the corner; padding=None (zero border) differs
+    # padding="extend": corner blob stays at the corner; padding=None (zero border) differs
     rng3 = np.random.default_rng(3)
     img_b = np.zeros((40, 40)); img_b[0, 0] = 100.0
     k_b = _gaussian_volume((9, 9), (2.0, 2.0)); k_b /= k_b.sum()
     obs_b = _convolve_same(np.pad(img_b, 20, mode="constant"), k_b)[20:-20, 20:-20]
     obs_b = obs_b + rng3.poisson(0.5, obs_b.shape)
-    rec_r = rl_deconvolve(obs_b, k_b, num_iter=60, padding="reflect")
+    rec_r = rl_deconvolve(obs_b, k_b, num_iter=60, padding="extend")
     rec_p = rl_deconvolve(obs_b, k_b, num_iter=60, padding=None)
     pk_r = np.unravel_index(np.argmax(rec_r), rec_r.shape)
     pk_p = np.unravel_index(np.argmax(rec_p), rec_p.shape)
     ghost_r, ghost_p = rec_r[33:, 33:].sum(), rec_p[33:, 33:].sum()
-    print(f"[rl] reflect peak {pk_r} (true (0,0)); no-padding peak {pk_p}; "
+    print(f"[rl] extend peak {pk_r} (true (0,0)); no-padding peak {pk_p}; "
           f"far-corner mass {ghost_r:.2e} vs {ghost_p:.2e}; flux {rec_r.sum() / obs_b.sum():.3f}")
     ok &= abs(pk_r[0]) <= 1 and abs(pk_r[1]) <= 1
     ok &= ghost_p > ghost_r and 0.8 < rec_r.sum() / obs_b.sum() < 1.05
 
-    # padding="reflect" in 3D with a non-cubic kernel (pad needs per-axis pairs)
+    # padding="extend" in 3D with a non-cubic kernel (pad needs per-axis pairs)
     img3 = np.zeros((24, 30, 30))
     img3[2, 3, 3] = 100.0
     k3 = _gaussian_volume((5, 9, 9), (1.0, 2.0, 2.0)); k3 /= k3.sum()
     obs3 = _convolve_same(np.pad(img3, 40, mode="constant"), k3)[40:-40, 40:-40, 40:-40]
-    rec3 = rl_deconvolve(obs3, k3, num_iter=40, padding="reflect")
+    rec3 = rl_deconvolve(obs3, k3, num_iter=40, padding="extend")
     pk3 = np.unravel_index(np.argmax(rec3), rec3.shape)
-    print(f"[rl] 3D reflect with non-cubic kernel: peak {pk3} (true (2,3,3)), "
+    print(f"[rl] 3D extend with non-cubic kernel: peak {pk3} (true (2,3,3)), "
           f"shape {rec3.shape} == input {obs3.shape}")
     ok &= rec3.shape == obs3.shape and abs(pk3[0] - 2) <= 1 and abs(pk3[1] - 3) <= 1
 

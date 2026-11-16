@@ -108,8 +108,46 @@ def main():
     ok &= s.shape == d_a.shape and (s >= 0).all()
     print("[init]  blurred-avg init runs")
 
+    # per-view weights: strips without data (as after registration) are
+    # ignored, whatever values they hold; the other view fills them in
+    w_a = np.ones((N, N)); w_a[:, :6] = 0.0
+    w_b = np.ones((N, N)); w_b[:5, :] = 0.0
+    g_a = d_a.copy(); g_a[:, :6] = np.nan
+    g_b = d_b.copy(); g_b[:5, :] = 1e4
+    jw = rl_deconvolve_multiview([g_a, g_b], [psf_a, psf_b], num_iter=N_ITER, bg=BG,
+                                 weights=[w_a, w_b])
+    wx, wz = _bead_fwhm(jw, y, x, x_stop)
+    w_flux = jw.sum() / j.sum()
+    print(f"[weights] masked strips: joint x={wx:.2f} z={wz:.2f}, flux vs unmasked {w_flux:.3f}")
+    ok &= bool(np.isfinite(jw).all()) and abs(wx - jx) < 0.3 and abs(wz - jz) < 0.3
+    ok &= abs(w_flux - 1.0) < 0.05
+
+    # padding="extend": same result for an object inside the window ...
+    je = rl_deconvolve_multiview([d_a, d_b], [psf_a, psf_b], num_iter=N_ITER, bg=BG,
+                                 padding="extend")
+    ex, ez = _bead_fwhm(je, y, x, x_stop)
+    print(f"[extend] joint x={ex:.2f} z={ez:.2f}, shape {je.shape}")
+    ok &= je.shape == d_a.shape and abs(ex - jx) < 0.3 and abs(ez - jz) < 0.3
+    # ... and light from a source just outside the window is attributed to the
+    # margin instead of the edge voxels (window truth is empty here)
+    big = np.zeros((N + 2 * K, N + 2 * K))
+    big[K - 4, K + 60] = 2e4                  # 4 px above the window
+    fs = [N + 3 * K - 1] * 2
+    blur = np.fft.irfftn(np.fft.rfftn(big, fs, axes=(0, 1))
+                         * np.fft.rfftn(psf_b, fs, axes=(0, 1)), fs, axes=(0, 1))
+    blur = np.maximum(blur[K // 2:K // 2 + N + 2 * K, K // 2:K // 2 + N + 2 * K], 0.0)
+    obs = rng.poisson(blur[K:K + N, K:K + N] + BG).astype(float)
+    r_n = rl_deconvolve(obs, psf_b, num_iter=100, bg=BG)
+    r_e = rl_deconvolve(obs, psf_b, num_iter=100, bg=BG, padding="extend")
+    print(f"[extend] outside source: in-window sum, zero border {r_n.sum():.0f} "
+          f"vs extend {r_e.sum():.0f}")
+    ok &= r_e.sum() < 0.3 * r_n.sum()
+
     # validation errors
     for bad in (
+        lambda: rl_deconvolve_multiview([d_a, d_b], [psf_a, psf_b], weights=[w_a]),           # weights len
+        lambda: rl_deconvolve_multiview([d_a, d_b], [psf_a, psf_b], weights=-w_a),            # weights < 0
+        lambda: rl_deconvolve_multiview([d_a, d_b], [psf_a, psf_b], padding="nope"),          # padding
         lambda: rl_deconvolve_multiview([d_a, d_b], [psf_a]),                      # len mismatch
         lambda: rl_deconvolve_multiview([d_a, d_b[:, :-1]], [psf_a, psf_b]),        # shape mismatch
         lambda: rl_deconvolve_multiview([d_a], [np.ones((3, 3, 3))]),                 # kernel ndim mismatch
