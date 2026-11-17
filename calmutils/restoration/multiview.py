@@ -29,13 +29,16 @@ from scipy.ndimage import gaussian_filter
 from .deconvolution import (_prepare_kernel, _convolve_same_fft_shape_crop,
                             _rl_update_factor, _sensitivity,
                             _inverse_sensitivity, _prepare_weights,
-                            _bandlimit_mask, _apply_bandlimit)
+                            _bandlimit_mask, _apply_bandlimit,
+                            _prepare_init, _window_crop, _call_callback,
+                            RLInfo)
 
 
 def rl_deconvolve_multiview(views, kernels, *, num_iter=25, bg=0.0,
                             bandlimit=None, padding=None, damp=None,
                             view_scales=None, weights=None,
-                            min_sensitivity=1e-2):
+                            min_sensitivity=1e-2, init=None, callback=None,
+                            return_info=False):
     """Joint multiview Richardson-Lucy deconvolution (Poisson ML).
 
     Parameters
@@ -96,12 +99,32 @@ def rl_deconvolve_multiview(views, kernels, *, num_iter=25, bg=0.0,
         Voxels whose summed sensitivity ``sum_i a_i H_i^T w_i`` is below this
         fraction of its maximum are set to 0 instead of being estimated (see
         :func:`rl_deconvolve`).
+    init : ndarray, optional
+        Start estimate, same shape as the views, finite and non-negative, in
+        the units of the output (bg-free, a view of brightness 1 - so it must
+        match the normalization of ``view_scales``, which are rescaled to
+        mean 1). None (default): blurred weighted average of the
+        bg-subtracted views. Pass one when that average is a poor start, e.g.
+        for views embedded on a finer grid with sparse (comb) weights, where
+        it is a blurred comb. Same handling as in :func:`rl_deconvolve`
+        (mirrored into the "extend" margin, floored, not modified; usable as
+        a warm start).
+    callback : callable, optional
+        ``callback(iteration, u)`` with a read-only view of the windowed
+        estimate; iteration 0 is the start, a truthy return value stops. See
+        :func:`rl_deconvolve` and :class:`RLHistory`.
+    return_info : bool
+        If True, return ``(u, info)`` with an :class:`RLInfo`: iterations
+        run, per-view sensitivity terms a_i H_i^T w_i (shape
+        (nviews, *view shape)), estimated-voxel mask and the normalized
+        view_scales used.
 
     Returns
     -------
     ndarray, same shape as each view, non-negative. Not renormalized: in the
     units of a view of average brightness (scale 1), with total flux
-    approximately the mean bg-subtracted flux of the views.
+    approximately the mean bg-subtracted flux of the views. With
+    ``return_info=True`` a tuple ``(u, RLInfo)``.
 
     Notes
     -----
@@ -190,14 +213,17 @@ def rl_deconvolve_multiview(views, kernels, *, num_iter=25, bg=0.0,
             raise ValueError("view_scales must be positive and finite")
     scales = scales / scales.mean()
 
-    # init: blurred weighted average of the bg-subtracted views in object
-    # units, sum_i w_i (d_i - bg_i) / sum_i w_i a_i (the estimate is bg-free)
-    # - places intensity at faint structures from the start
-    num = sum(w * (v - b) for w, v, b in zip(weights, views, bg))
-    den = sum(a * w for a, w in zip(scales, weights))
-    u = gaussian_filter(num / np.maximum(den, 1e-12 * den.max()), 2.0)
-    if u.max() <= 0:
-        raise ValueError("views have no signal above bg")
+    if init is None:
+        # init: blurred weighted average of the bg-subtracted views in object
+        # units, sum_i w_i (d_i - bg_i) / sum_i w_i a_i (the estimate is
+        # bg-free) - places intensity at faint structures from the start
+        num = sum(w * (v - b) for w, v, b in zip(weights, views, bg))
+        den = sum(a * w for a, w in zip(scales, weights))
+        u = gaussian_filter(num / np.maximum(den, 1e-12 * den.max()), 2.0)
+        if u.max() <= 0:
+            raise ValueError("views have no signal above bg")
+    else:
+        u = _prepare_init(init, shape)
 
     # weighted data w_i * d_i and weights on the working domain; the margin
     # has weight 0, so the values of d_i and bg_i there never enter the update
@@ -244,10 +270,16 @@ def rl_deconvolve_multiview(views, kernels, *, num_iter=25, bg=0.0,
 
     # RL normalization 1 / sum_i a_i H_i^T w_i (the sum is nviews in the
     # interior for full weights, smaller where views have no data nearby)
+    window = _window_crop(pad, shape)
     sens = np.zeros(wshape)
+    sens_views = [] if return_info else None
     for w, of, ca in zip(weights, otf_flip, crops_adj):
-        sens += _sensitivity(w, of, s, ca, axes, workers)
+        sv = _sensitivity(w, of, s, ca, axes, workers)
+        sens += sv
+        if return_info:
+            sens_views.append(sv[window].copy())
     inv_sens = _inverse_sensitivity(sens, min_sensitivity)
+    del sens
 
     mask = (_bandlimit_mask(wshape, bandlimit, ndim)
             if bandlimit is not None else None)
@@ -255,7 +287,9 @@ def rl_deconvolve_multiview(views, kernels, *, num_iter=25, bg=0.0,
     if damp is not None:
         damp = float(damp)
 
-    for _ in range(int(num_iter)):
+    it = 0
+    stop = callback is not None and _call_callback(callback, 0, u, window)
+    while not stop and it < int(num_iter):
         U = _fft.rfftn(u, s=s, axes=axes, workers=workers)  # shared across views
 
         # accumulate per-view corrections / updates
@@ -271,9 +305,15 @@ def rl_deconvolve_multiview(views, kernels, *, num_iter=25, bg=0.0,
         np.maximum(u, 0.0, out=u)
         if mask is not None:
             u = _apply_bandlimit(u, mask, axes, workers)
+        it += 1
+        stop = callback is not None and _call_callback(callback, it, u, window)
 
-    # crop the extended domain back to the window
-    if pad is not None:
-        u = u[tuple(slice(p0, p0 + n) for (p0, _), n in zip(pad, shape))]
-
-    return u
+    # crop the extended domain back to the window (copy: the result must not
+    # be a view into the padded working array)
+    u = u[window].copy() if pad is not None else u
+    if not return_info:
+        return u
+    info = RLInfo(num_iter=it, sensitivity=np.stack(sens_views),
+                  estimated=(inv_sens > 0)[window].copy(),
+                  view_scales=scales.copy(), pad=pad)
+    return u, info

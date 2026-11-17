@@ -1,9 +1,114 @@
 import warnings
+from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
 import scipy.fft as _fft
 
 EPS = 1e-12  # fixed numerical division guard (0/0);
+
+
+@dataclass
+class RLInfo:
+    """Diagnostics of an RL run, returned with ``return_info=True``.
+
+    Attributes
+    ----------
+    num_iter : int
+        Iterations actually run (fewer than requested if a callback stopped
+        early).
+    sensitivity : ndarray
+        RL normalization, cropped to the output window. Single view: H^T w,
+        same shape as the output. Multiview: one term a_i H_i^T w_i per view,
+        shape (nviews, *output shape); the RL update divides by their sum.
+        Shows where each view constrains the estimate (coverage) and, with
+        sparse weights, sampling ripple.
+    estimated : ndarray of bool
+        Voxels that were estimated (summed sensitivity above
+        ``min_sensitivity`` times its maximum); the rest are 0 in the output.
+    view_scales : ndarray or None
+        Multiview only: the normalized (mean 1) per-view brightness a_i that
+        was used, given or estimated from the data.
+    pad : tuple or None
+        Per-axis (before, after) margin of padding="extend", None without.
+    """
+    num_iter: int
+    sensitivity: np.ndarray
+    estimated: np.ndarray
+    view_scales: Optional[np.ndarray] = None
+    pad: Optional[tuple] = None
+
+
+class RLHistory:
+    """Callback collecting RL iterates, e.g. to inspect convergence as a
+    "time lapse".
+
+    Parameters
+    ----------
+    every : int
+        Keep iteration 0 (the start estimate) and every ``every``-th
+        iteration after it.
+    roi : tuple of slices, optional
+        Keep only this region of each iterate (index into the output).
+    dtype : dtype
+        Stored dtype (default float32, half the memory of the float64
+        working arrays).
+
+    Example
+    -------
+    >>> hist = RLHistory(every=5)
+    >>> u = rl_deconvolve(img, psf, num_iter=100, callback=hist)
+    >>> hist.stack().shape   # (21, *img.shape); hist.iterations = [0, 5, ...]
+    """
+
+    def __init__(self, every=1, roi=None, dtype=np.float32):
+        if int(every) < 1:
+            raise ValueError("every must be >= 1")
+        self.every = int(every)
+        self.roi = roi
+        self.dtype = dtype
+        self.iterations = []
+        self.frames = []
+
+    def __call__(self, iteration, u):
+        if iteration % self.every == 0:
+            x = u if self.roi is None else u[self.roi]
+            self.frames.append(np.array(x, dtype=self.dtype, copy=True))
+            self.iterations.append(iteration)
+
+    def stack(self):
+        """Collected iterates as one array, shape (n_frames, *frame shape)."""
+        return np.stack(self.frames)
+
+
+def _prepare_init(init, shape):
+    """Validate a user-supplied start estimate: matching shape, finite,
+    non-negative, some positive value. Returns a float array (a copy when
+    ``init`` already is float, so the caller's array is never modified)."""
+    u = np.array(init, dtype=float)
+    if u.shape != tuple(shape):
+        raise ValueError(f"init must have the output shape {tuple(shape)}, "
+                         f"got {u.shape}")
+    if not np.all(np.isfinite(u)) or np.any(u < 0):
+        raise ValueError("init must be finite and non-negative")
+    if u.max() <= 0:
+        raise ValueError("init has no positive values")
+    return u
+
+
+def _window_crop(pad, shape):
+    """Slices of the output window within the working domain."""
+    if pad is None:
+        return tuple(slice(None) for _ in shape)
+    return tuple(slice(p0, p0 + n) for (p0, _), n in zip(pad, shape))
+
+
+def _call_callback(callback, it, u, crop):
+    """Hand a read-only view of the windowed estimate to the callback; a
+    truthy return value requests a stop."""
+    view = u[crop]
+    view.flags.writeable = False
+    return bool(callback(it, view))
 
 
 def _convolve_same(img, kernel):
@@ -154,7 +259,8 @@ def _apply_bandlimit(u, mask, axes, workers):
 
 
 def rl_deconvolve(observed, kernel, *, num_iter=25, bandlimit=None, padding=None,
-                  damp=None, bg=0.0, weights=None, min_sensitivity=1e-2):
+                  damp=None, bg=0.0, weights=None, min_sensitivity=1e-2,
+                  init=None, callback=None, return_info=False):
     """Richardson-Lucy deconvolution with a known kernel (Poisson ML).
 
     The update is ``u <- u * H^T(w d / (H u + bg)) / (H^T w)`` with per-pixel
@@ -234,15 +340,36 @@ def rl_deconvolve(observed, kernel, *, num_iter=25, bandlimit=None, padding=None
         are set to 0 instead of being estimated (they would be amplified by
         1 / sensitivity). Only reached in the outer part of the "extend"
         margin or deep inside large zero-weight regions.
+    init : ndarray, optional
+        Start estimate, same shape as ``observed``, finite and non-negative,
+        in the units of the output (bg-free). None (default): the
+        bg-subtracted observed image. Mirrored into the margin for
+        padding="extend" and floored at 1e-3 of its maximum like the default
+        start (exact zeros would stay zero). Passing a previous result
+        continues it ("warm start") - close to, but not identical with, one
+        longer run, because the floor is re-applied and the "extend" margin
+        is re-mirrored. The array passed in is not modified.
+    callback : callable, optional
+        ``callback(iteration, u)``, called with iteration 0 for the start
+        estimate and with k after the k-th update (including the band
+        limit). ``u`` is a READ-ONLY VIEW of the current estimate, cropped to
+        the output window; the next iteration overwrites it, so copy what you
+        want to keep. A truthy return value stops the iterations. See
+        :class:`RLHistory` for collecting iterates.
+    return_info : bool
+        If True, return ``(u, info)`` with an :class:`RLInfo` (iterations
+        run, sensitivity, estimated-voxel mask).
 
     Returns
     -------
-    ndarray, same shape as ``observed``, non-negative.
+    ndarray, same shape as ``observed``, non-negative; with
+    ``return_info=True`` a tuple ``(u, RLInfo)``.
 
     Notes
     -----
-    - Initialization: u starts at the bg-subtracted observed image (skimage
-      starts at a constant 0.5 - same ML fixed point, different transient).
+    - Initialization: u starts at the bg-subtracted observed image unless
+      ``init`` is given (skimage starts at a constant 0.5 - same ML fixed
+      point, different transient).
     - Performance: the kernel OTFs (forward and adjoint) are transformed once
       (not per convolution), FFT sizes are rounded up to fast lengths, and
       transforms run through scipy.fft multithreaded - 4 FFTs per iteration
@@ -278,10 +405,13 @@ def rl_deconvolve(observed, kernel, *, num_iter=25, bandlimit=None, padding=None
             raise ValueError("bg array must match the observed shape")
 
     # init: bg-subtracted observed image (the estimate u is bg-free; bg lives
-    # only in the denominator), mirrored into the margin
-    u = np.maximum(img - bg, 0.0)
-    if u.max() <= 0:
-        raise ValueError("observed has no signal above bg")
+    # only in the denominator) or the given start, mirrored into the margin
+    if init is None:
+        u = np.maximum(img - bg, 0.0)
+        if u.max() <= 0:
+            raise ValueError("observed has no signal above bg")
+    else:
+        u = _prepare_init(init, img.shape)
 
     # weighted data w * d and weights on the working domain; the margin has
     # weight 0, so the values of d and bg there never enter the update
@@ -317,8 +447,10 @@ def rl_deconvolve(observed, kernel, *, num_iter=25, bandlimit=None, padding=None
                          s=s, axes=axes, workers=workers)
 
     # RL normalization 1 / (H^T w), see _sensitivity
-    inv_sens = _inverse_sensitivity(
-        _sensitivity(w, otf_adj, s, crop_adj, axes, workers), min_sensitivity)
+    sens = _sensitivity(w, otf_adj, s, crop_adj, axes, workers)
+    inv_sens = _inverse_sensitivity(sens, min_sensitivity)
+    if not return_info:
+        del sens
 
     mask = (_bandlimit_mask(u.shape, bandlimit, ndim)
             if bandlimit is not None else None)
@@ -326,8 +458,12 @@ def rl_deconvolve(observed, kernel, *, num_iter=25, bandlimit=None, padding=None
     if damp is not None:
         damp = float(damp)
 
+    window = _window_crop(pad, img.shape)
+
     # main RL loop
-    for _ in range(int(num_iter)):
+    it = 0
+    stop = callback is not None and _call_callback(callback, 0, u, window)
+    while not stop and it < int(num_iter):
         U = _fft.rfftn(u, s=s, axes=axes, workers=workers)
         u *= _rl_update_factor(U, wd, otf, otf_adj, s, crop, crop_adj,
                                axes, workers, damp, bg)
@@ -335,8 +471,14 @@ def rl_deconvolve(observed, kernel, *, num_iter=25, bandlimit=None, padding=None
         np.maximum(u, 0.0, out=u)
         if mask is not None:
             u = _apply_bandlimit(u, mask, axes, workers)
+        it += 1
+        stop = callback is not None and _call_callback(callback, it, u, window)
 
-    # crop the extended domain back to the window
-    if pad is not None:
-        u = u[tuple(slice(p0, p0 + n) for (p0, _), n in zip(pad, img.shape))]
-    return u
+    # crop the extended domain back to the window (copy: the result must not
+    # be a view into the padded working array)
+    u = u[window].copy() if pad is not None else u
+    if not return_info:
+        return u
+    info = RLInfo(num_iter=it, sensitivity=sens[window].copy(),
+                  estimated=(inv_sens > 0)[window].copy(), pad=pad)
+    return u, info

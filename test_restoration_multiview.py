@@ -14,8 +14,9 @@ Run directly:
 Prints per-section results and "TEST PASSED" / "TEST FAILED".
 """
 import numpy as np
+from scipy.ndimage import gaussian_filter
 
-from calmutils.restoration import rl_deconvolve, rl_deconvolve_multiview
+from calmutils.restoration import rl_deconvolve, rl_deconvolve_multiview, RLHistory
 
 
 def _gauss(shape, sigmas):
@@ -143,8 +144,79 @@ def main():
           f"vs extend {r_e.sum():.0f}")
     ok &= r_e.sum() < 0.3 * r_n.sum()
 
+    # init: default start passed explicitly reproduces the default exactly
+    num = (d_a - BG) + (d_b - BG)
+    fl_n = np.array(fl) / np.mean(fl)
+    init_def = np.maximum(gaussian_filter(num / fl_n.sum(), 2.0), 0.0)
+    ji = rl_deconvolve_multiview([d_a, d_b], [psf_a, psf_b], num_iter=N_ITER, bg=BG,
+                                 init=init_def)
+    ok &= np.allclose(j, ji, rtol=1e-6, atol=1e-9)
+    # a flat start converges to the same ML neighbourhood
+    jf = rl_deconvolve_multiview([d_a, d_b], [psf_a, psf_b], num_iter=N_ITER, bg=BG,
+                                 init=np.full(d_a.shape, 1.0))
+    fx, fz = _bead_fwhm(jf, y, x, x_stop)
+    print(f"[init]  explicit default init matches: {np.allclose(j, ji, rtol=1e-6, atol=1e-9)}; "
+          f"flat init x={fx:.2f} z={fz:.2f}")
+    ok &= abs(fx - jx) < 0.5 and abs(fz - jz) < 0.5
+    # init is not modified; single view accepts init too
+    flat = np.full(d_a.shape, 1.0)
+    rl_deconvolve(d_a, psf_a, num_iter=3, bg=BG, init=flat, padding="extend")
+    ok &= bool((flat == 1.0).all())
+    s_def = rl_deconvolve(d_a, psf_a, num_iter=20, bg=BG)
+    s_ini = rl_deconvolve(d_a, psf_a, num_iter=20, bg=BG, init=np.maximum(d_a - BG, 0))
+    ok &= np.allclose(s_def, s_ini)
+
+    # callback: iteration 0 = start, then 1..n; read-only views; early stop
+    hist = RLHistory(every=10)
+    jh = rl_deconvolve_multiview([d_a, d_b], [psf_a, psf_b], num_iter=N_ITER, bg=BG,
+                                 callback=hist)
+    ok &= hist.iterations == list(range(0, N_ITER + 1, 10))
+    ok &= np.allclose(hist.frames[-1], jh, rtol=1e-5) and np.allclose(jh, j)
+    ok &= hist.stack().shape == (N_ITER // 10 + 1, N, N)
+    seen = []
+
+    def _cb(it, u):
+        seen.append(it)
+        try:
+            u[0, 0] = 1.0
+            seen.append("writable")
+        except ValueError:
+            pass
+        return it == 7
+
+    _, inf = rl_deconvolve_multiview([d_a, d_b], [psf_a, psf_b], num_iter=50, bg=BG,
+                                     padding="extend", callback=_cb, return_info=True)
+    ok &= seen == list(range(8)) and inf.num_iter == 7
+    print(f"[callback] history iterations {hist.iterations[:3]}..{hist.iterations[-1]}, "
+          f"early stop after {inf.num_iter}, read-only: {'writable' not in seen}")
+    seen.clear()
+    rl_deconvolve(d_a, psf_a, num_iter=4, bg=BG, callback=_cb)
+    ok &= seen == list(range(5))
+
+    # return_info: per-view sensitivity, scales, estimated mask; result unchanged
+    jr, info = rl_deconvolve_multiview([d_a, d_b], [psf_a, psf_b], num_iter=N_ITER,
+                                       bg=BG, weights=[w_a, w_b], return_info=True,
+                                       padding="extend")
+    je_w = rl_deconvolve_multiview([d_a, d_b], [psf_a, psf_b], num_iter=N_ITER, bg=BG,
+                                   weights=[w_a, w_b], padding="extend")
+    ok &= np.array_equal(jr, je_w) and jr.shape == (N, N)
+    ok &= info.sensitivity.shape == (2, N, N) and info.estimated.shape == (N, N)
+    ok &= np.allclose(info.view_scales, fl_n, rtol=1e-3) and info.num_iter == N_ITER
+    # interior: a_i H_i^T 1 = a_i; masked strip of view A: its term drops to ~0
+    ok &= np.allclose(info.sensitivity[:, N // 2, N // 2], info.view_scales, rtol=1e-6)
+    ok &= info.sensitivity[0, N // 2, 0] < 0.6 * info.view_scales[0]
+    print(f"[info]  scales {np.round(info.view_scales, 3)}, interior sens "
+          f"{np.round(info.sensitivity[:, N // 2, N // 2], 3)}, "
+          f"view A sens at masked strip {info.sensitivity[0, N // 2, 0]:.3f}")
+    _, sinfo = rl_deconvolve(d_a, psf_a, num_iter=2, bg=BG, return_info=True)
+    ok &= sinfo.sensitivity.shape == (N, N) and sinfo.view_scales is None
+
     # validation errors
     for bad in (
+        lambda: rl_deconvolve_multiview([d_a, d_b], [psf_a, psf_b], init=np.ones((N, N - 1))),  # init shape
+        lambda: rl_deconvolve_multiview([d_a, d_b], [psf_a, psf_b], init=-np.ones((N, N))),     # init < 0
+        lambda: rl_deconvolve(d_a, psf_a, init=np.zeros((N, N))),                                # init all 0
+        lambda: RLHistory(every=0),
         lambda: rl_deconvolve_multiview([d_a, d_b], [psf_a, psf_b], weights=[w_a]),           # weights len
         lambda: rl_deconvolve_multiview([d_a, d_b], [psf_a, psf_b], weights=-w_a),            # weights < 0
         lambda: rl_deconvolve_multiview([d_a, d_b], [psf_a, psf_b], padding="nope"),          # padding
