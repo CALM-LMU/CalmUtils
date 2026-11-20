@@ -15,7 +15,7 @@ positions in physical units (catches sign errors of the sub-voxel offsets),
 best-of-both resolution vs. the same experiment on a common fine grid,
 coverage, extents, and input validation. Run directly:
 
-    $ python test_restoration_multiview_grid.py
+    $ python exploration/restoration/test_restoration_multiview_grid.py
 
 Prints per-section results and "TEST PASSED" / "TEST FAILED".
 """

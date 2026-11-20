@@ -9,7 +9,7 @@ view, that sum is approximately conserved, and that input validation works.
 
 Run directly:
 
-    $ python test_restoration_multiview.py
+    $ python exploration/restoration/test_restoration_multiview.py
 
 Prints per-section results and "TEST PASSED" / "TEST FAILED".
 """

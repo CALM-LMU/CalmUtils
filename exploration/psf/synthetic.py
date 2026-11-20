@@ -1,15 +1,19 @@
 """Synthetic PSFs with known aberrations.
 
-Ground truth for the numeric tests in ``test_restoration.py`` and for the
-visual metric gallery ``psf_metrics_gallery.ipynb`` (repo root): each
-aberration parameter maps to a known :func:`psf_metrics` /
-:func:`second_moments` readout, so the gallery shows at a glance which metric
-responds to which aberration.
+Ground truth for the numeric tests in ``test_restoration.py`` (repo root) and
+for the visual metric gallery ``psf_metrics_gallery.ipynb`` (next to this
+file, ``exploration/psf/``): each aberration parameter maps to a known
+:func:`psf_metrics` / :func:`second_moments` readout, so the gallery shows at
+a glance which metric responds to which aberration.
+
+Exploratory module - deliberately NOT part of the ``calmutils`` package (no
+re-export in ``calmutils/restoration/__init__.py``); import it by path, see
+``test_restoration.py`` for an example.
 """
 
 import numpy as np
 
-from .shift import subpixel_shift
+from calmutils.restoration.shift import subpixel_shift
 
 __all__ = ["gaussian_psf", "synthetic_psf"]
 

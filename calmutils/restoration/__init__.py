@@ -13,7 +13,6 @@ from .psf_metrics import (
     encircled_energy,
     radius_at_fraction,
 )
-from .synthetic import gaussian_psf, synthetic_psf
 from .zernike import (
     NOLL, NAMED, zernike, noll,
     psf_2d, psf_stack, output_pixel_size,

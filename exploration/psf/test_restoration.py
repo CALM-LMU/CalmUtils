@@ -4,26 +4,32 @@ scratchbook PSF pipeline into calmutils:
 
   calmutils.restoration.subpixel_shift / rl_deconvolve / resample_psf /
       psf_metrics / profile_metrics / axis_profile / second_moments /
-      synthetic_psf / encircled_energy / radius_at_fraction
+      encircled_energy / radius_at_fraction
+  synthetic.py next to this file (synthetic_psf; not part of the package)
   calmutils.morphology.bead_kernel
   calmutils.localization.util.nearest_neighbor_distances
 
 Synthetic data with known ground truth throughout. Run directly:
 
-    $ python test_restoration.py
+    $ python exploration/psf/test_restoration.py
 
 Prints per-section results and "TEST PASSED" / "TEST FAILED".
 """
 
+import os
+import sys
 import warnings
 
 import numpy as np
 
 from calmutils.restoration import (
     subpixel_shift, rl_deconvolve, resample_psf,
-    axis_profile, profile_metrics, psf_metrics, second_moments, synthetic_psf,
+    axis_profile, profile_metrics, psf_metrics, second_moments,
     encircled_energy, radius_at_fraction,
 )
+# synthetic_psf is not part of the package; it lives next to this script
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from synthetic import synthetic_psf  # noqa: E402
 from calmutils.restoration.deconvolution import _convolve_same
 from calmutils.morphology import bead_kernel
 from calmutils.localization.util import (nearest_neighbor_distances,
