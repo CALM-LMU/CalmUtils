@@ -4,7 +4,7 @@
 Run it with an interpreter that has napari + magicgui installed (the ``viz``
 optional extra), e.g.:
 
-    /Users/david/miniforge3/envs/env-py314/bin/python zernike_examples/zernike_psf_viewer.py
+    /Users/david/miniforge3/envs/env-py314/bin/python exploration/zernike/zernike_psf_viewer.py
 
 A docked magicgui widget (see
 https://napari.org/stable/howtos/extending/magicgui.html) exposes sliders for

@@ -7,7 +7,7 @@ import sys
 import numpy as np
 import pytest
 
-EXAMPLES = os.path.join(os.path.dirname(__file__), "..", "zernike_examples")
+EXAMPLES = os.path.join(os.path.dirname(__file__), "..", "exploration", "zernike")
 sys.path.insert(0, os.path.abspath(EXAMPLES))
 
 import zernike_metric_survey as survey  # noqa: E402

@@ -18,7 +18,7 @@ from qtpy.QtWidgets import QApplication  # noqa: E402
 
 _app = QApplication.instance() or QApplication([])
 
-EXAMPLES = os.path.join(os.path.dirname(__file__), "..", "zernike_examples")
+EXAMPLES = os.path.join(os.path.dirname(__file__), "..", "exploration", "zernike")
 sys.path.insert(0, os.path.abspath(EXAMPLES))
 
 import napari  # noqa: E402

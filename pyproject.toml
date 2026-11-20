@@ -25,7 +25,7 @@ dependencies = [
 torch = ["torch"]
 ml = ["torch", "lightning"]
 test = ["pytest", "torch", "lightning"]
-# interactive exploration: zernike_examples/zernike_psf_viewer.py
+# interactive exploration: exploration/zernike/zernike_psf_viewer.py
 viz = ["napari", "magicgui"]
 
 [tool.pytest.ini_options]

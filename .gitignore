@@ -5,3 +5,5 @@ dist
 __pycache__
 .DS_Store
 .ipynb_checkpoints
+# regenerable exploration outputs (figures, survey CSVs)
+exploration/zernike/output/

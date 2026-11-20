@@ -17,7 +17,7 @@ Design
    (Spearman, monotone redundancy) and a PCA of the standardized metric space
    (effective dimensionality vs. number of modes).
 
-Outputs (in ``--outdir``, default: this script's directory):
+Outputs (in ``--outdir``, default: ``output/`` next to this script):
 - ``metric_survey.png`` : 3 panels - metric correlation heatmap, mode x metric
   sensitivity heatmap (percentile ranks), PCA scree.
 - ``survey_oat.csv`` / ``survey_random.csv`` : raw samples (one row per PSF);
@@ -26,7 +26,7 @@ Outputs (in ``--outdir``, default: this script's directory):
   normalized sensitivity matrices.
 
 Run (needs only numpy/scipy/matplotlib, all package deps):
-    python zernike_examples/zernike_metric_survey.py --amp-max 0.2 --n-amp 9 --n-random 300
+    python exploration/zernike/zernike_metric_survey.py --amp-max 0.2 --n-amp 9 --n-random 300
 """
 
 import argparse
@@ -115,7 +115,8 @@ def main(argv=None):
     ap.add_argument("--n-amp", type=int, default=9, help="OAT sweep points per mode")
     ap.add_argument("--n-random", type=int, default=300, help="random design size")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--outdir", default=os.path.dirname(os.path.abspath(__file__)))
+    ap.add_argument("--outdir", default=os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "output"))
     args = ap.parse_args(argv)
     os.makedirs(args.outdir, exist_ok=True)
     rng = np.random.default_rng(args.seed)
